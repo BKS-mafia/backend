@@ -147,15 +147,16 @@ async def health_check():
     """
     from app.redis.client import get_redis
     from app.db.session import AsyncSessionLocal
+    from sqlalchemy import text
 
     # Проверка подключения к БД
     db_ok = False
     try:
         async with AsyncSessionLocal() as session:
-            await session.execute("SELECT 1")
+            await session.execute(text("SELECT 1"))
             db_ok = True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("Database health check failed")
 
     # Проверка подключения к Redis
     redis_ok = False
@@ -163,8 +164,8 @@ async def health_check():
         redis_client = await get_redis()
         await redis_client.ping()
         redis_ok = True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("Redis health check failed")
 
     return {
         "status": "ok",
