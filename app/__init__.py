@@ -9,6 +9,7 @@ __author__ = "AI Mafia Team"
 from app.core.config import settings
 from app.db.session import get_db, init_db, close_db
 from app.redis.client import get_redis, close_redis
+from app import crud, schemas
 
 __all__ = [
     "settings",
@@ -17,4 +18,6 @@ __all__ = [
     "close_db",
     "get_redis",
     "close_redis",
+    "crud",
+    "schemas",
 ]
