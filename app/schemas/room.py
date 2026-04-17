@@ -35,7 +35,7 @@ class RoomInDBBase(RoomBase):
     updated_at: Optional[datetime] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class Room(RoomInDBBase):
