@@ -48,7 +48,7 @@ async def redirect_short_id(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Room not found",
         )
-    return RedirectResponse(url=f"/rooms/{room.room_id}")
+    return RedirectResponse(url=f"/api/rooms/{room.room_id}")
 
 
 # ── 2.1 GET / — список активных лобби ────────────────────────────────────────
