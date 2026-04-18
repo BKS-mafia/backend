@@ -20,16 +20,11 @@ class RoomCRUD:
         """
         Создать новую комнату.
         """
-        # Преобразуем статус в перечисление RoomStatus
-        try:
-            status_enum = RoomStatus(obj_in.status) if obj_in.status else RoomStatus.LOBBY
-        except ValueError:
-            status_enum = RoomStatus.LOBBY
+        # Статус автоматически устанавливается в "lobby" при создании
+        status_enum = RoomStatus.LOBBY
 
-        # Генерируем room_id, если не предоставлен
-        room_id = obj_in.room_id.strip() if obj_in.room_id else None
-        if not room_id:
-            room_id = str(uuid.uuid4())
+        # Генерируем room_id
+        room_id = str(uuid.uuid4())
 
         # Генерируем host_token, если не предоставлен
         host_token = obj_in.host_token.strip() if obj_in.host_token else None
@@ -63,9 +58,9 @@ class RoomCRUD:
             ai_count=obj_in.ai_count,
             people_count=obj_in.people_count,
             roles=roles_json,
-            current_players=obj_in.current_players,
-            ai_players=obj_in.ai_players,
-            human_players=obj_in.human_players,
+            current_players=0,
+            ai_players=0,
+            human_players=0,
             settings=json.dumps(obj_in.settings) if obj_in.settings else None,
         )
         db.add(room)

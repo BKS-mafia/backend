@@ -15,8 +15,6 @@ class RoleConfig(BaseModel):
 
 
 class RoomBase(BaseModel):
-    room_id: str
-    short_id: Optional[str] = None
     host_token: str
     status: str
     total_players: int = Field(alias="totalPlayers", default=8)
@@ -32,8 +30,16 @@ class RoomBase(BaseModel):
         populate_by_name = True
 
 
-class RoomCreate(RoomBase):
-    pass
+class RoomCreate(BaseModel):
+    host_token: str
+    total_players: int = Field(alias="totalPlayers", default=8)
+    ai_count: int = Field(alias="aiCount", default=3)
+    people_count: int = Field(alias="peopleCount", default=5)
+    roles: Optional[Dict[str, RoleConfig]] = None
+    settings: Optional[Dict[str, Any]] = None
+
+    class Config:
+        populate_by_name = True
 
 
 class RoomUpdate(BaseModel):
@@ -53,6 +59,8 @@ class RoomUpdate(BaseModel):
 
 class RoomInDBBase(RoomBase):
     id: int
+    room_id: str
+    short_id: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
