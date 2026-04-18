@@ -35,8 +35,29 @@
                     <div class="form-group">
                         <button id="btn-get-rooms">Получить список комнат</button>
                     </div>
+                    
+                    <!-- Настройки комнаты -->
                     <div class="form-group">
-                        <button id="btn-create-room">Создать новую комнату</button>
+                        <label for="input-total-players">Всего игроков:</label>
+                        <input type="number" id="input-total-players" value="8" min="4" max="12" style="width: 60px;">
+                    </div>
+                    <div class="form-group">
+                        <label for="input-ai-count">AI игроков:</label>
+                        <input type="number" id="input-ai-count" value="3" min="0" max="12" style="width: 60px;">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="checkbox-all-ai"> Все игроки ИИ
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="checkbox-show-ai-messages" checked> Показывать сообщения нейросетей
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <button id="btn-create-room">Создать комнату</button>
+                        <button id="btn-create-all-ai-room" style="margin-left: 5px;">Все ИИ</button>
                     </div>
                     <div class="form-group">
                         <label for="input-room-id">Room ID:</label>

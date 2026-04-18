@@ -203,6 +203,7 @@ class GameService:
             room_id=room_id,
             db=db,
             ws_manager=self.ws_manager,
+            game_id=game.id,  # Передаём game_id для автоматического перехода из LOBBY
             ai_service=ai_service,
             mcp_dispatcher=mcp_dispatcher
         )

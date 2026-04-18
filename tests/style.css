@@ -249,3 +249,25 @@ button:disabled {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--accent-color);
 }
+
+/* Стили для сообщений от ИИ */
+.log-ai-message {
+    border-left-color: #94e2d5 !important;
+    background-color: rgba(148, 226, 213, 0.1) !important;
+    border: 1px solid rgba(148, 226, 213, 0.3);
+}
+
+.log-ai-message .log-type {
+    color: #94e2d5 !important;
+}
+
+/* Анимация для новых сообщений от ИИ */
+@keyframes aiMessagePulse {
+    0% { box-shadow: 0 0 0 0 rgba(148, 226, 213, 0.4); }
+    70% { box-shadow: 0 0 0 10px rgba(148, 226, 213, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(148, 226, 213, 0); }
+}
+
+.log-ai-message {
+    animation: aiMessagePulse 2s ease-out;
+}

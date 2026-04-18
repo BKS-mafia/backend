@@ -182,9 +182,19 @@ class StateMachine:
 
     async def _process_ai_chat_message(self, player_id: int, content: str) -> dict:
         """Колбэк MCP send_message — обрабатывает сообщение бота в общий чат."""
+        logger.info(f"_process_ai_chat_message called: player_id={player_id}, content='{content}'")
+        logger.info(f"  self.players: {[(p.id, p.nickname, p.is_alive) for p in self.players]}")
+        
         player = next((p for p in self.players if p.id == player_id), None)
-        if not player or not player.is_alive:
-            return {"ok": False, "reason": "player not found or dead"}
+        if not player:
+            logger.warning(f"Player {player_id} NOT FOUND in self.players")
+            # Попробуем найти по нику
+            logger.warning(f"Available players: {[(p.id, p.nickname) for p in self.players]}")
+            return {"ok": False, "reason": "player not found"}
+        
+        if not player.is_alive:
+            logger.warning(f"Player {player_id} is dead")
+            return {"ok": False, "reason": "player dead"}
 
         msg = {
             "sender_id": player_id,
@@ -195,6 +205,7 @@ class StateMachine:
         self.day_chat_history.append(msg)
 
         # Разослать всем игрокам комнаты
+        logger.info(f"Broadcasting chat message from player {player_id}: {content}")
         await self._broadcast({
             "event": "chat_message",
             "data": msg,
@@ -271,8 +282,15 @@ class StateMachine:
     async def handle_lobby(self):
         """Фаза лобби — ожидаем сигнала старта игры."""
         await self._broadcast({"event": "phase_changed", "data": {"phase": "lobby"}})
-        # Реальный переход в ROLE_ASSIGNMENT происходит по команде host'а через API/WS.
-        # Здесь просто останавливаем цикл до получения такой команды.
+        
+        # Проверяем, была ли игра уже запущена (через game_service)
+        # Если игра уже началась (есть game_id), сразу переходим к ROLE_ASSIGNMENT
+        if self.game_id:
+            logger.info(f"Game already started for room {self.room_id}, transitioning to ROLE_ASSIGNMENT")
+            self.current_phase = GamePhase.ROLE_ASSIGNMENT
+            return
+        
+        # Иначе ожидаем сигнала старта игры от хоста
         await asyncio.sleep(1)
 
     async def handle_role_assignment(self):
@@ -425,6 +443,26 @@ class StateMachine:
                 for idx, res in enumerate(results):
                     if isinstance(res, Exception):
                         logger.error(f"AI night action error (task {idx}): {res}")
+                        # Fallback для каждой роли при ошибке
+                        player = None
+                        if idx < len(mafia_ai):
+                            player = mafia_ai[idx]
+                            alive_non_mafia = [p for p in self.players if p.is_alive and p.role != PlayerRole.MAFIA]
+                            if alive_non_mafia:
+                                target = random.choice(alive_non_mafia)
+                                self.night_actions[player.id] = {"action": "kill", "target_id": target.id}
+                        elif idx < len(mafia_ai) + len(doctor_ai):
+                            player = doctor_ai[idx - len(mafia_ai)]
+                            alive_all = [p for p in self.players if p.is_alive]
+                            if alive_all:
+                                target = random.choice(alive_all)
+                                self.night_actions[player.id] = {"action": "heal", "target_id": target.id}
+                        else:
+                            player = commissioner_ai[idx - len(mafia_ai) - len(doctor_ai)]
+                            non_self = [p for p in self.players if p.is_alive and p.id != player.id]
+                            if non_self:
+                                target = random.choice(non_self)
+                                self.night_actions[player.id] = {"action": "investigate", "target_id": target.id}
         else:
             # Fallback: случайный выбор если ai_service не подключён
             alive_non_mafia = [
@@ -614,8 +652,12 @@ class StateMachine:
 
     async def _run_ai_day_chat(self) -> None:
         """Запускает дневной чат ботов с реалистичными задержками."""
+        logger.info(f"_run_ai_day_chat START: players count = {len(self.players)}")
         ai_alive = [p for p in self.players if p.is_ai and p.is_alive]
+        logger.info(f"  AI alive players: {[(p.id, p.nickname) for p in ai_alive]}")
+        
         if not ai_alive:
+            logger.info("  No AI alive players, returning")
             return
 
         # 3 раунда диалога с рандомными задержками
@@ -642,10 +684,32 @@ class StateMachine:
                 await asyncio.sleep(random.uniform(2, 5))
 
                 ctx = self._build_game_context({"phase": "day"})
+                logger.info(f"Calling AI service for player {bot.id} ({bot.nickname})")
+                logger.info(f"  ai_service: {self.ai_service}")
+                logger.info(f"  mcp_dispatcher: {self.mcp_dispatcher}")
+                
                 try:
-                    await self.ai_service.request_day_message(bot, ctx, self.mcp_dispatcher)
+                    result = await self.ai_service.request_day_message(bot, ctx, self.mcp_dispatcher)
+                    logger.info(f"AI day message result for player {bot.id}: {result}")
+                    
+                    # Если результат пустой или ошибка - используем fallback
+                    if not result or result.get("error"):
+                        raise Exception(f"AI returned error or empty result: {result}")
                 except Exception as e:
                     logger.error(f"AI day message error (player_id={bot.id}): {e}")
+                    # Fallback: отправляем случайное сообщение если API недоступен
+                    fallback_messages = [
+                        "Интересно, кто же мафия?",
+                        "Нужно внимательнее следить за поведением игроков.",
+                        "Я доверяю этому игроку.",
+                        "Давайте обсудим кандидатов.",
+                        "Кто-то ведёт себя подозрительно.",
+                        "Я мирный житель, не голосуйте за меня.",
+                        "Нужно больше информации.",
+                        "Слушаю ваши аргументы.",
+                    ]
+                    fallback_msg = random.choice(fallback_messages)
+                    await self._process_ai_chat_message(bot.id, fallback_msg)
 
                 await self._broadcast(
                     {"event": "typing_indicator", "data": {"player_id": bot.id, "typing": False}}

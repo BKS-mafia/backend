@@ -401,14 +401,51 @@ class AIService:
         ]
 
         player_id = player.get("id") if isinstance(player, dict) else getattr(player, "id", 0)
+        
+        logger.info(f"request_day_message START: player_id={player_id}")
+        logger.info(f"  system_prompt length: {len(system_prompt)}")
+        logger.info(f"  context_msg length: {len(context_msg)}")
+        logger.info(f"  dispatcher: {dispatcher}")
+        logger.info(f"  dispatcher._send_message_cb: {getattr(dispatcher, '_send_message_cb', 'NOT FOUND')}")
 
         try:
+            logger.info(f"request_day_message: player_id={player_id}, tools={DAY_TOOLS}")
+            
             response_message = await self.client.generate_response(
                 messages=messages,
                 tools=DAY_TOOLS,
                 tool_choice={"type": "function", "function": {"name": "send_message"}},
             )
+            
+            # Логируем ответ для отладки
+            logger.info(f"AI response for player {player_id}: {response_message}")
+            
+            # Проверяем, есть ли tool_calls
+            tool_calls = response_message.get("tool_calls") or []
+            if not tool_calls:
+                # Нейросеть не вызвала инструмент - используем content как сообщение
+                content = response_message.get("content", "")
+                logger.info(f"AI returned content (no tool_calls): '{content}'")
+                if content:
+                    # Вызываем колбэк напрямую
+                    send_message_cb = dispatcher._send_message_cb
+                    if send_message_cb:
+                        logger.info(f"Calling send_message_cb directly with content: '{content}'")
+                        await send_message_cb(player_id=player_id, content=content)
+                        return {"ok": True, "content": content}
+            
             results = await dispatcher.parse_and_dispatch(response_message, player_id=player_id)
+            logger.info(f"dispatch results: {results}")
+            
+            # Если результаты пустые, пробуем использовать content
+            if not results and response_message.get("content"):
+                content = response_message.get("content", "")
+                send_message_cb = dispatcher._send_message_cb
+                if send_message_cb and content:
+                    logger.info(f"Using content as fallback: '{content}'")
+                    await send_message_cb(player_id=player_id, content=content)
+                    return {"ok": True, "content": content}
+            
             return results[0] if results else {}
         except Exception as e:
             logger.error(f"request_day_message ошибка (player_id={player_id}): {e}")

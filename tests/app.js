@@ -25,6 +25,12 @@ const els = {
     inputTargetId: document.getElementById('input-target-id'),
     selectNightAction: document.getElementById('select-night-action'),
     
+    // Настройки комнаты
+    inputTotalPlayers: document.getElementById('input-total-players'),
+    inputAiCount: document.getElementById('input-ai-count'),
+    checkboxAllAI: document.getElementById('checkbox-all-ai'),
+    checkboxShowAIMessages: document.getElementById('checkbox-show-ai-messages'),
+    
     // Кнопки
     btnGetRooms: document.getElementById('btn-get-rooms'),
     btnCreateRoom: document.getElementById('btn-create-room'),
@@ -40,15 +46,25 @@ const els = {
     btnWsVote: document.getElementById('btn-ws-vote'),
     btnWsNightAction: document.getElementById('btn-ws-night-action'),
     btnClearLogs: document.getElementById('btn-clear-logs'),
+    btnCreateAllAIRoom: document.getElementById('btn-create-all-ai-room'),
     
     // Контейнеры
     logsContainer: document.getElementById('logs-container')
 };
 
 // --- Логирование ---
-function log(message, type = 'info', data = null) {
+// Флаг для отображения сообщений от ИИ
+let showAIMessages = true;
+
+function log(message, type = 'info', data = null, isAIMessage = false) {
     const entry = document.createElement('div');
-    entry.className = `log-entry log-${type}`;
+    
+    // Класс для сообщений от ИИ
+    let entryClass = `log-entry log-${type}`;
+    if (isAIMessage) {
+        entryClass += ' log-ai-message';
+    }
+    entry.className = entryClass;
     
     const time = new Date().toLocaleTimeString();
     const timeSpan = `<span class="log-time">[${time}]</span>`;
@@ -58,6 +74,7 @@ function log(message, type = 'info', data = null) {
     if (type === 'error') typeLabel = 'ERROR';
     if (type === 'ws-send') typeLabel = 'WS_SEND';
     if (type === 'ws-recv') typeLabel = 'WS_RECV';
+    if (isAIMessage) typeLabel = 'AI_MSG';
     
     const typeSpan = `<span class="log-type">${typeLabel}</span>`;
     
@@ -132,19 +149,52 @@ els.btnGetRooms.addEventListener('click', async () => {
     await apiRequest('/api/rooms/');
 });
 
+// Обработчик чекбокса "Все игроки ИИ"
+els.checkboxAllAI.addEventListener('change', () => {
+    if (els.checkboxAllAI.checked) {
+        const totalPlayers = parseInt(els.inputTotalPlayers.value, 10) || 8;
+        els.inputAiCount.value = totalPlayers;
+        els.inputAiCount.disabled = true;
+    } else {
+        els.inputAiCount.disabled = false;
+    }
+});
+
+// Обновление aiCount при изменении totalPlayers
+els.inputTotalPlayers.addEventListener('change', () => {
+    if (els.checkboxAllAI.checked) {
+        const totalPlayers = parseInt(els.inputTotalPlayers.value, 10) || 8;
+        els.inputAiCount.value = totalPlayers;
+    }
+});
+
+// Обработчик чекбокса "Показывать сообщения нейросетей"
+els.checkboxShowAIMessages.addEventListener('change', () => {
+    showAIMessages = els.checkboxShowAIMessages.checked;
+    log(`Режим показа сообщений ИИ: ${showAIMessages ? 'ВКЛ' : 'ВЫКЛ'}`, 'info');
+});
+
 els.btnCreateRoom.addEventListener('click', async () => {
     try {
         // Генерируем случайный UUID для комнаты
         const roomId = crypto.randomUUID();
         const hostToken = crypto.randomUUID();
         
+        const totalPlayers = parseInt(els.inputTotalPlayers.value, 10) || 8;
+        const aiCount = parseInt(els.inputAiCount.value, 10) || 0;
+        const peopleCount = totalPlayers - aiCount;
+        const showAIMessages = els.checkboxShowAIMessages.checked;
+        
         const payload = {
             room_id: roomId,
             host_token: hostToken,
             status: "lobby",
-            totalPlayers: 8,
-            aiCount: 3,
-            peopleCount: 5
+            totalPlayers: totalPlayers,
+            aiCount: aiCount,
+            peopleCount: peopleCount,
+            settings: {
+                showAIMessages: showAIMessages
+            }
         };
         
         const data = await apiRequest('/api/rooms/', 'POST', payload);
@@ -154,10 +204,149 @@ els.btnCreateRoom.addEventListener('click', async () => {
         els.inputRoomId.value = currentRoomId;
         
         log(`Комната создана. Room ID: ${currentRoomId}`, 'success');
+        log(`Настройки: игроков=${totalPlayers}, AI=${aiCount}, показ сообщений ИИ=${showAIMessages ? 'ВКЛ' : 'ВЫКЛ'}`, 'info');
     } catch (e) {
         // Ошибка уже залогирована в apiRequest
     }
 });
+
+// Кнопка "Все ИИ" - создать комнату где все игроки ИИ и сразу запустить игру
+els.btnCreateAllAIRoom.addEventListener('click', async () => {
+    try {
+        const roomId = crypto.randomUUID();
+        const hostToken = crypto.randomUUID();
+        const totalPlayers = parseInt(els.inputTotalPlayers.value, 10) || 8;
+        const showAIMessages = els.checkboxShowAIMessages.checked;
+        
+        const payload = {
+            room_id: roomId,
+            host_token: hostToken,
+            status: "lobby",
+            totalPlayers: totalPlayers,
+            aiCount: totalPlayers,  // Все игроки ИИ
+            peopleCount: 0,
+            settings: {
+                showAIMessages: showAIMessages
+            }
+        };
+        
+        const data = await apiRequest('/api/rooms/', 'POST', payload);
+        
+        currentRoomId = data.room_id;
+        currentHostToken = data.host_token;
+        els.inputRoomId.value = currentRoomId;
+        
+        log(`Комната "Все ИИ" создана. Room ID: ${currentRoomId}`, 'success');
+        log(`Запуск игры с ${totalPlayers} ИИ-игроками...`, 'info');
+        
+        // Автоматически присоединяемся как хост (без реального игрока, просто для получения events)
+        // Создаём фиктивного игрока для WebSocket подключения
+        const playerId = crypto.randomUUID();
+        const joinPayload = {
+            player_id: playerId,
+            room_id: 0,
+            nickname: "Host_Observer",
+            is_ai: false
+        };
+        
+        const joinData = await apiRequest(`/api/rooms/${currentRoomId}/join`, 'POST', joinPayload);
+        currentSessionToken = joinData.session_token;
+        els.inputSessionToken.value = currentSessionToken;
+        
+        log(`Присоединён к комнате. Подключаемся к WebSocket...`, 'info');
+        
+        // Подключаемся к WebSocket для получения событий
+        await connectToWebSocket();
+        
+        // Используем HTTP API для старта игры
+        setTimeout(async () => {
+            log(`Запускаем игру через HTTP API...`, 'info');
+            try {
+                const startData = await apiRequest(`/api/rooms/${currentRoomId}/game/start`, 'POST', {});
+                log(`Игра запущена! ID игры: ${startData.game_id}`, 'success');
+                log(`Ожидаем сообщений от нейросетей...`, 'info');
+            } catch (e) {
+                log(`Ошибка запуска игры: ${e.message}`, 'error');
+            }
+        }, 1000);
+        
+    } catch (e) {
+        // Ошибка уже залогирована в apiRequest
+    }
+});
+
+// Функция подключения к WebSocket (извлечена для переиспользования)
+function connectToWebSocket() {
+    return new Promise((resolve, reject) => {
+        const roomId = els.inputRoomId.value.trim();
+        const token = els.inputSessionToken.value.trim();
+        
+        if (!roomId || !token) {
+            log('Для подключения нужны Room ID и Session Token', 'error');
+            reject(new Error('No room or token'));
+            return;
+        }
+        
+        if (ws) {
+            ws.close();
+        }
+        
+        els.wsStatusIndicator.className = 'status-indicator connecting';
+        els.wsStatusText.textContent = 'Connecting...';
+        
+        const wsUrl = `${WS_BASE_URL}/ws/rooms/${roomId}?token=${token}`;
+        log(`Подключение к WS: ${wsUrl}`, 'info');
+        
+        ws = new WebSocket(wsUrl);
+        
+        ws.onopen = () => {
+            log('WebSocket соединение установлено', 'success');
+            updateWsUI(true);
+            resolve();
+        };
+        
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                
+                // Проверяем, является ли сообщение от ИИ
+                let isAIMessage = false;
+                
+                if (data.is_ai === true || data.from_ai === true) {
+                    isAIMessage = true;
+                } else if (data.data && (data.data.is_ai === true || data.data.from_ai === true)) {
+                    isAIMessage = true;
+                } else if (data.player && data.player.is_ai === true) {
+                    isAIMessage = true;
+                }
+                
+                // Проверяем тип сообщения - чат от ИИ
+                const isAIChat = (data.event === 'chat_message' || data.type === 'chat_message') && isAIMessage;
+                
+                // Если это сообщение от ИИ и режим показа выключен - не показываем
+                if ((isAIMessage || isAIChat) && !showAIMessages) {
+                    return; // Пропускаем сообщение от ИИ
+                }
+                
+                log(`Получено WS: ${data.type || data.event || 'unknown'}`, 'ws-recv', data, isAIMessage || isAIChat);
+            } catch (e) {
+                log(`Получено WS (raw): ${event.data}`, 'ws-recv');
+            }
+        };
+        
+        ws.onclose = (event) => {
+            log(`WebSocket отключен. Код: ${event.code}, Причина: ${event.reason}`, 'warning');
+            updateWsUI(false);
+            ws = null;
+        };
+        
+        ws.onerror = (error) => {
+            log('WebSocket ошибка', 'error');
+            updateWsUI(false);
+            reject(error);
+        };
+    });
+}
 
 els.btnGetRoom.addEventListener('click', async () => {
     const roomId = els.inputRoomId.value.trim();
@@ -226,49 +415,7 @@ function wsSend(type, payload = {}) {
 }
 
 els.btnWsConnect.addEventListener('click', () => {
-    const roomId = els.inputRoomId.value.trim();
-    const token = els.inputSessionToken.value.trim();
-    
-    if (!roomId || !token) {
-        return log('Для подключения нужны Room ID и Session Token (сначала Join)', 'error');
-    }
-    
-    if (ws) {
-        ws.close();
-    }
-    
-    els.wsStatusIndicator.className = 'status-indicator connecting';
-    els.wsStatusText.textContent = 'Connecting...';
-    
-    const wsUrl = `${WS_BASE_URL}/ws/rooms/${roomId}?token=${token}`;
-    log(`Подключение к WS: ${wsUrl}`, 'info');
-    
-    ws = new WebSocket(wsUrl);
-    
-    ws.onopen = () => {
-        log('WebSocket соединение установлено', 'success');
-        updateWsUI(true);
-    };
-    
-    ws.onmessage = (event) => {
-        try {
-            const data = JSON.parse(event.data);
-            log(`Получено WS: ${data.type || data.event || 'unknown'}`, 'ws-recv', data);
-        } catch (e) {
-            log(`Получено WS (raw): ${event.data}`, 'ws-recv');
-        }
-    };
-    
-    ws.onclose = (event) => {
-        log(`WebSocket отключен. Код: ${event.code}, Причина: ${event.reason}`, 'warning');
-        updateWsUI(false);
-        ws = null;
-    };
-    
-    ws.onerror = (error) => {
-        log('WebSocket ошибка', 'error');
-        updateWsUI(false);
-    };
+    connectToWebSocket().catch(() => {});
 });
 
 els.btnWsDisconnect.addEventListener('click', () => {
