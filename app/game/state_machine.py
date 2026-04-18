@@ -25,6 +25,7 @@ class GamePhase(str, Enum):
     NIGHT = "night"
     DAY = "day"
     VOTING = "voting"
+    TURING_TEST = "turing_test"
     FINISHED = "finished"
 
 
@@ -60,6 +61,10 @@ class StateMachine:
         self.day_chat_history: List[dict] = []
         # Ссылка на GameService для управления таймерами фаз (устанавливается извне)
         self.game_service = None
+        # Победитель игры (устанавливается в check_game_over)
+        self.winner: Optional[str] = None
+        # Голоса в Тесте Тьюринга: {suspect_player_id: [voter_id_1, ...]}
+        self.turing_votes: Dict[int, List[int]] = {}
 
         self._register_dispatcher_callbacks()
 
@@ -243,6 +248,9 @@ class StateMachine:
                     await self.handle_day()
                 elif self.current_phase == GamePhase.VOTING:
                     await self.handle_voting()
+                elif self.current_phase == GamePhase.TURING_TEST:
+                    # Тест Тьюринга — ожидаем голосов или принудительного завершения по таймеру
+                    await asyncio.sleep(1)
                 elif self.current_phase == GamePhase.FINISHED:
                     await self.handle_finished()
                     break
@@ -460,9 +468,10 @@ class StateMachine:
 
         await self.resolve_night_actions()
 
-        # Переход в дневную фазу
-        self.current_phase = GamePhase.DAY
-        await self.update_game_status(GameStatus.DAY)
+        # Переход в дневную фазу только если игра ещё не завершена
+        if self.current_phase not in (GamePhase.FINISHED, GamePhase.TURING_TEST):
+            self.current_phase = GamePhase.DAY
+            await self.update_game_status(GameStatus.DAY)
 
     async def resolve_night_actions(self) -> None:
         """Resolve the night actions and update player states."""
@@ -747,8 +756,8 @@ class StateMachine:
         self.day_number += 1
         await self.check_game_over()
 
-        # Если игра не завершена — переходим к ночи
-        if self.current_phase != GamePhase.FINISHED:
+        # Если игра не завершена и не в Тесте Тьюринга — переходим к ночи
+        if self.current_phase not in (GamePhase.FINISHED, GamePhase.TURING_TEST):
             self.current_phase = GamePhase.NIGHT
             await self.update_game_status(GameStatus.NIGHT)
             if self.game_service:
@@ -809,16 +818,174 @@ class StateMachine:
             # Принудительно завершаем голосование — считаем с тем что есть
             await self._finalize_voting()
 
+        elif self.current_phase == GamePhase.TURING_TEST:
+            # Принудительно завершаем Тест Тьюринга по таймеру
+            await self._finish_turing_test()
+
         elif self.current_phase == GamePhase.LOBBY:
             logger.info(
                 f"force_advance_phase called during LOBBY for room {self.room_id}, ignoring"
             )
 
+    # ------------------------------------------------------------------
+    # Тест Тьюринга
+    # ------------------------------------------------------------------
+
+    async def _start_turing_test(self) -> None:
+        """Запустить фазу Теста Тьюринга после окончания игры."""
+        self.current_phase = GamePhase.TURING_TEST
+        self.turing_votes = {}
+
+        # Формируем список всех игроков (включая мёртвых), НЕ раскрывая is_ai
+        all_players_info = [
+            {
+                "id": p.id,
+                "name": p.nickname or f"Player{p.id}",
+                "is_alive": p.is_alive,
+            }
+            for p in self.players
+        ]
+
+        payload = {
+            "event": "turing_test_started",
+            "data": {
+                "message": "The game is over! Now guess which players were AI bots.",
+                "players": all_players_info,
+                "duration_seconds": 90,
+                "instruction": (
+                    "Vote for the players you think were AI bots. "
+                    "You can vote for multiple players."
+                ),
+            },
+        }
+
+        # Рассылаем и живым, и призракам
+        await self._broadcast(payload)
+        if self.ws_manager:
+            await self.ws_manager.broadcast_to_ghosts(self.room_id, payload)
+
+        # Обновляем фазу в БД
+        await self.update_game_status(GameStatus.TURING_TEST)
+
+        # Запускаем страховочный таймер Теста Тьюринга
+        if self.game_service:
+            self.game_service.start_phase_timer(self.room_id, "turing_test")
+
+        logger.info(f"Turing test started for room {self.room_id}")
+
+    async def _handle_turing_test_vote(
+        self, voter_id: int, suspected_ai_ids: List[int]
+    ) -> None:
+        """
+        Обработать голос игрока в Тесте Тьюринга.
+
+        Args:
+            voter_id: ID игрока, который голосует
+            suspected_ai_ids: список ID игроков, которых он считает ИИ
+        """
+        for suspect_id in suspected_ai_ids:
+            if suspect_id not in self.turing_votes:
+                self.turing_votes[suspect_id] = []
+            if voter_id not in self.turing_votes[suspect_id]:
+                self.turing_votes[suspect_id].append(voter_id)
+
+        # Подтверждаем голос голосующему
+        if self.ws_manager:
+            await self.ws_manager.send_to_player(
+                voter_id,
+                {
+                    "event": "turing_vote_accepted",
+                    "data": {"suspected_ai_ids": suspected_ai_ids},
+                },
+            )
+        logger.info(
+            f"Turing vote from player {voter_id}: suspects {suspected_ai_ids}"
+        )
+
+    def _calculate_humanness_scores(self) -> Dict[int, float]:
+        """
+        Вычислить «метрику человечности» для каждого ИИ-игрока.
+
+        Формула: humanness = 1 - (votes_received / max_possible_votes)
+        1.0 — никто не заподозрил (идеально «человечный» ИИ)
+        0.0 — все заподозрили (очевидный ИИ)
+        """
+        total_players = len(self.players)
+        scores: Dict[int, float] = {}
+
+        for p in self.players:
+            if not getattr(p, "is_ai", False):
+                continue
+            votes_received = len(self.turing_votes.get(p.id, []))
+            max_votes = total_players - 1  # нельзя голосовать за себя
+            if max_votes <= 0:
+                scores[p.id] = 1.0
+            else:
+                humanness = 1.0 - (votes_received / max_votes)
+                scores[p.id] = round(max(0.0, min(1.0, humanness)), 3)
+
+        return scores
+
     async def _finish_turing_test(self) -> None:
-        """Завершить тест Тьюринга (заглушка для будущей реализации)."""
-        logger.info(f"Turing test phase force-ended for room {self.room_id}")
-        self.current_phase = GamePhase.VOTING
-        await self.update_game_status(GameStatus.VOTING)
+        """Завершить Тест Тьюринга: подсчитать результаты и сохранить в БД."""
+        from app.crud import game as game_crud
+
+        # Отменяем таймер Тьюринга
+        if self.game_service:
+            self.game_service.cancel_phase_timer(self.room_id)
+
+        humanness_scores = self._calculate_humanness_scores()
+
+        # Раскрываем реальные роли и результаты
+        reveal_data = [
+            {
+                "id": p.id,
+                "name": p.nickname or f"Player{p.id}",
+                "is_ai": getattr(p, "is_ai", False),
+                "role": p.role.value if p.role else "unknown",
+                "humanness_score": humanness_scores.get(p.id),  # None для людей
+                "votes_against": len(self.turing_votes.get(p.id, [])),
+            }
+            for p in self.players
+        ]
+
+        result_payload = {
+            "event": "turing_test_results",
+            "data": {
+                "reveal": reveal_data,
+                "turing_votes": {str(k): v for k, v in self.turing_votes.items()},
+                "humanness_scores": {str(k): v for k, v in humanness_scores.items()},
+                "message": "Here are the true identities of all players!",
+            },
+        }
+
+        # Рассылаем результаты и живым, и призракам
+        await self._broadcast(result_payload)
+        if self.ws_manager:
+            await self.ws_manager.broadcast_to_ghosts(self.room_id, result_payload)
+
+        # Сохраняем в БД
+        if self.game_id:
+            try:
+                await game_crud.save_turing_results(
+                    db=self.db,
+                    game_id=self.game_id,
+                    turing_votes={str(k): v for k, v in self.turing_votes.items()},
+                    humanness_scores={str(k): v for k, v in humanness_scores.items()},
+                )
+            except Exception as e:
+                logger.error(f"Failed to save turing results for game {self.game_id}: {e}")
+
+        # Переходим в FINISHED
+        self.current_phase = GamePhase.FINISHED
+        await self._broadcast(
+            {
+                "event": "game_finished",
+                "data": {"winner": self.winner},
+            }
+        )
+        await self.update_game_status(GameStatus.FINISHED)
+        logger.info(f"Turing test finished for room {self.room_id}")
 
     async def handle_finished(self) -> None:
         """Фаза завершения игры — логирование и остановка."""
@@ -849,8 +1016,7 @@ class StateMachine:
         else:
             return
 
-        self.current_phase = GamePhase.FINISHED
-        await self.update_game_status(GameStatus.FINISHED)
+        self.winner = winner
 
         if self.game_id:
             game: Optional[Game] = await self.db.get(Game, self.game_id)
@@ -890,6 +1056,9 @@ class StateMachine:
                 ),
             }
         )
+        
+        # Запускаем Тест Тьюринга вместо прямого перехода в FINISHED
+        await self._start_turing_test()
 
     async def update_game_status(self, status: GameStatus) -> None:
         """Обновить статус игры в базе данных."""

@@ -201,7 +201,17 @@ class GameService:
         )
 
         # Создание State Machine с передачей ws_manager для рассылки событий
-        machine = StateMachine(room_id=room_id, db=db, ws_manager=self.ws_manager)
+        from app.services.ai_service import ai_service
+        from app.ai.mcp_tools import MCPToolDispatcher
+        
+        mcp_dispatcher = MCPToolDispatcher()
+        machine = StateMachine(
+            room_id=room_id,
+            db=db,
+            ws_manager=self.ws_manager,
+            ai_service=ai_service,
+            mcp_dispatcher=mcp_dispatcher
+        )
         self.active_machines[room_id] = machine
         # Связываем machine с сервисом для запуска таймеров при смене фаз
         machine.game_service = self

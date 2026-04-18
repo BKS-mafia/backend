@@ -147,6 +147,18 @@ async def handle_websocket_message(
         await handle_reconnect(websocket, player, message, db)
     elif event_type == "kick_player":
         await handle_kick_player(websocket, player, message, db)
+    elif event_type == "turing_test_vote":
+        # Получаем state_machine из game_service
+        state_machine = game_service.active_machines.get(player.room_id)
+        await handle_turing_test_vote(
+            websocket=websocket,
+            room_id=player.room_id,
+            player_id=player.id,
+            data=message,
+            db=db,
+            ws_manager=manager,
+            state_machine=state_machine
+        )
     else:
         await manager.send_personal_message(
             {"error": f"Unknown event type: {event_type!r}"}, websocket
@@ -773,3 +785,45 @@ async def handle_kick_player(
         f"Player {target_player_id} ({target_nickname!r}) kicked from room "
         f"{player.room_id} by host {player.id} ({player.nickname!r})"
     )
+
+
+async def handle_turing_test_vote(
+    websocket: WebSocket,
+    room_id: int,
+    player_id: int,
+    data: dict,
+    db: AsyncSession,
+    ws_manager,
+    state_machine=None
+) -> None:
+    """
+    Обработать голос в Тесте Тьюринга.
+    
+    Ожидаемые данные:
+    {
+        "type": "turing_test_vote",
+        "suspected_ai_ids": [1, 3, 5]  // список ID игроков которых считаем ИИ
+    }
+    """
+    suspected_ai_ids = data.get("suspected_ai_ids", [])
+    
+    if not isinstance(suspected_ai_ids, list):
+        await ws_manager.send_personal_message(
+            {"event": "error", "data": {"message": "suspected_ai_ids must be a list of player IDs"}},
+            websocket
+        )
+        return
+    
+    # Фильтруем валидные ID (не сам игрок)
+    valid_ids = [pid for pid in suspected_ai_ids if isinstance(pid, int) and pid != player_id]
+    
+    if state_machine and state_machine.current_phase == GamePhase.TURING_TEST:
+        await state_machine._handle_turing_test_vote(
+            voter_id=player_id,
+            suspected_ai_ids=valid_ids
+        )
+    else:
+        await ws_manager.send_personal_message(
+            {"event": "error", "data": {"message": "Game not found or not in Turing Test phase"}},
+            websocket
+        )
