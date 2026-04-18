@@ -2,7 +2,7 @@ import asyncio
 import random
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set
-from app.models.room import Room
+from app.models.room import Room, RoomStatus
 from app.models.player import Player, PlayerRole
 from app.models.game import Game, GameStatus
 from app.models.game_event import GameEvent
@@ -1071,7 +1071,7 @@ class StateMachine:
         # Обновляем статус комнаты при необходимости
         room = await self.db.get(Room, self.room_id)
         if room and status in [GameStatus.NIGHT, GameStatus.DAY, GameStatus.VOTING]:
-            if room.status == "lobby":
-                room.status = "playing"
+            if room.status == RoomStatus.LOBBY:
+                room.status = RoomStatus.PLAYING
                 self.db.add(room)
                 await self.db.commit()

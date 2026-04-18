@@ -230,8 +230,8 @@ class RoomService:
                 f"требуется {room.total_players}, сейчас {room.current_players}"
             )
 
-        # Проверка, что комната в статусе "waiting"
-        if room.status != "waiting":
+        # Проверка, что комната в статусе "lobby"
+        if room.status != "lobby":
             raise ValueError(f"Комната не готова к началу игры (статус: {room.status})")
 
         # Обновление статуса комнаты
