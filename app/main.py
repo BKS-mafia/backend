@@ -20,6 +20,7 @@ from app.redis.client import close_redis
 from app.api.rooms import router as rooms_router
 from app.websocket.handlers import router as websocket_router
 from app.websocket.manager import manager
+from app.models import *  # Импорт всех моделей для регистрации в SQLAlchemy
 
 # Настройка логгера
 logger = logging.getLogger(__name__)

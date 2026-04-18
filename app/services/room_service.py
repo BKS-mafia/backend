@@ -171,7 +171,8 @@ class RoomService:
         # Проверка, что игрок с таким nickname уже не присутствует в комнате (опционально)
         # Для простоты пропускаем
 
-        # Создание игрока
+        # Гарантируем, что room_id в схеме совпадает с внутренним ID комнаты (Pydantic v2)
+        player_create = player_create.model_copy(update={"room_id": room_id})
         player = await self.player_crud.create(db, obj_in=player_create)
         logger.info(f"Игрок {player.id} присоединился к комнате {room_id}")
 

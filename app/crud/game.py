@@ -2,9 +2,11 @@
 CRUD операции для модели Game.
 """
 from typing import Optional, List
+import json
+from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app import schemas
-from app.models.game import Game as GameModel
+from app.models.game import Game as GameModel, GameStatus
 
 
 class GameCRUD:
@@ -15,21 +17,20 @@ class GameCRUD:
     async def create(self, db: AsyncSession, *, obj_in: schemas.GameCreate) -> GameModel:
         """
         Создать новую запись игры.
-        Заглушка: возвращает фиктивную игру.
         """
-        # TODO: реализовать создание игры в БД
-        from app.models.game import Game
-        from datetime import datetime
-        game = Game(
-            id=1,
+        # Преобразование статуса в enum
+        try:
+            status_enum = GameStatus(obj_in.status) if obj_in.status else GameStatus.LOBBY
+        except ValueError:
+            status_enum = GameStatus.LOBBY
+
+        game = GameModel(
             room_id=obj_in.room_id,
-            status=obj_in.status,
-            day_number=obj_in.day_number,
-            night_actions=None,
-            voting_results=None,
-            winner=None,
-            created_at=datetime.utcnow(),
-            updated_at=None,
+            status=status_enum,
+            day_number=obj_in.day_number if obj_in.day_number is not None else 1,
+            night_actions=json.dumps(obj_in.night_actions) if obj_in.night_actions else None,
+            voting_results=json.dumps(obj_in.voting_results) if obj_in.voting_results else None,
+            winner=obj_in.winner,
         )
         db.add(game)
         await db.commit()
@@ -39,10 +40,10 @@ class GameCRUD:
     async def get(self, db: AsyncSession, id: int) -> Optional[GameModel]:
         """
         Получить игру по ID.
-        Заглушка: возвращает None.
         """
-        # TODO: реализовать запрос к БД
-        return None
+        stmt = select(GameModel).where(GameModel.id == id)
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def get_by_room(
         self,
@@ -51,11 +52,29 @@ class GameCRUD:
         room_id: int,
     ) -> Optional[GameModel]:
         """
-        Получить активную игру в комнате (последнюю).
-        Заглушка: возвращает None.
+        Получить последнюю игру в комнате.
         """
-        # TODO: реализовать запрос к БД
-        return None
+        stmt = (
+            select(GameModel)
+            .where(GameModel.room_id == room_id)
+            .order_by(desc(GameModel.id))
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_all_by_room(
+        self,
+        db: AsyncSession,
+        *,
+        room_id: int,
+    ) -> List[GameModel]:
+        """
+        Получить все игры в комнате.
+        """
+        stmt = select(GameModel).where(GameModel.room_id == room_id).order_by(GameModel.id)
+        result = await db.execute(stmt)
+        return result.scalars().all()
 
     async def update(
         self,
@@ -66,16 +85,48 @@ class GameCRUD:
     ) -> GameModel:
         """
         Обновить игру.
-        Заглушка: возвращает тот же объект.
         """
-        # TODO: реализовать обновление
+        update_data = obj_in.dict(exclude_unset=True)
+        if not update_data:
+            return db_obj
+
+        # Преобразование статуса в enum, если передан
+        if "status" in update_data and update_data["status"] is not None:
+            try:
+                update_data["status"] = GameStatus(update_data["status"])
+            except ValueError:
+                del update_data["status"]
+
+        # Сериализация JSON-полей
+        if "night_actions" in update_data:
+            update_data["night_actions"] = (
+                json.dumps(update_data["night_actions"])
+                if update_data["night_actions"] is not None
+                else None
+            )
+        if "voting_results" in update_data:
+            update_data["voting_results"] = (
+                json.dumps(update_data["voting_results"])
+                if update_data["voting_results"] is not None
+                else None
+            )
+
+        for field, value in update_data.items():
+            setattr(db_obj, field, value)
+
+        await db.commit()
+        await db.refresh(db_obj)
         return db_obj
 
-    async def delete(self, db: AsyncSession, *, id: int) -> GameModel:
+    async def delete(self, db: AsyncSession, *, id: int) -> Optional[GameModel]:
         """
         Удалить игру.
-        Заглушка: возвращает фиктивный объект.
+        Возвращает удалённый объект или None, если не найден.
         """
-        # TODO: реализовать удаление
-        from app.models.game import Game
-        return Game()
+        game = await self.get(db, id=id)
+        if not game:
+            return None
+
+        await db.delete(game)
+        await db.commit()
+        return game

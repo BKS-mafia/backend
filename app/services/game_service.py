@@ -6,7 +6,9 @@
 """
 import asyncio
 import logging
-from typing import Dict, Optional, Any
+import random
+import uuid
+from typing import Dict, List, Optional, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.game.state_machine import StateMachine, GamePhase
@@ -14,8 +16,10 @@ from app.websocket.manager import ConnectionManager
 from app.crud.room import RoomCRUD
 from app.crud.player import PlayerCRUD
 from app.crud.game import GameCRUD
+from app import schemas
 from app.models.room import Room as RoomModel
 from app.models.game import Game as GameModel
+from app.models.player import Player as PlayerModel
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +44,102 @@ class GameService:
         self.active_machines: Dict[int, StateMachine] = {}  # room_id -> StateMachine
         self.tasks: Dict[int, asyncio.Task] = {}  # room_id -> задача таймера
 
+    async def _fill_with_ai_players(
+        self,
+        db: AsyncSession,
+        room: RoomModel,
+        existing_players: List[PlayerModel],
+    ) -> List[PlayerModel]:
+        """
+        Дозаполнить комнату AI-игроками до room.max_players.
+
+        Создаёт записи Player с is_ai=True и случайными уникальными никнеймами
+        для каждого недостающего игрока. Обновляет счётчики комнаты.
+
+        Args:
+            db: Сессия БД.
+            room: Объект комнаты.
+            existing_players: Текущий список игроков в комнате.
+
+        Returns:
+            Список созданных AI-игроков (может быть пустым, если дозаполнение не нужно).
+
+        Raises:
+            Exception: Если создание какого-либо AI-игрока завершилось ошибкой.
+        """
+        needed: int = room.max_players - len(existing_players)
+        if needed <= 0:
+            logger.debug(
+                f"Комната {room.id}: дозаполнение AI-игроками не требуется "
+                f"({len(existing_players)}/{room.max_players})"
+            )
+            return []
+
+        # Занятые никнеймы — для гарантии уникальности в рамках сессии
+        occupied_nicknames: set[str] = {p.nickname for p in existing_players}
+
+        created_ai_players: List[PlayerModel] = []
+
+        for _ in range(needed):
+            # Генерируем никнейм, уникальный среди уже занятых в этой сессии
+            attempt: int = 0
+            while True:
+                nickname: str = f"AI_Bot_{random.randint(1000, 9999)}"
+                if nickname not in occupied_nicknames:
+                    occupied_nicknames.add(nickname)
+                    break
+                attempt += 1
+                if attempt > 1000:
+                    # Страховочный выход во избежание бесконечного цикла
+                    nickname = f"AI_Bot_{uuid.uuid4().hex[:6]}"
+                    occupied_nicknames.add(nickname)
+                    break
+
+            player_create = schemas.PlayerCreate(
+                player_id=str(uuid.uuid4()),
+                room_id=room.id,
+                nickname=nickname,
+                is_ai=True,
+                is_alive=True,
+                is_connected=False,
+                session_token=str(uuid.uuid4()),
+            )
+
+            try:
+                ai_player: PlayerModel = await self.player_crud.create(
+                    db, obj_in=player_create
+                )
+                created_ai_players.append(ai_player)
+                logger.info(
+                    f"Создан AI-игрок '{nickname}' (id={ai_player.id}) "
+                    f"для комнаты {room.id}"
+                )
+            except Exception as exc:
+                logger.error(
+                    f"Ошибка создания AI-игрока '{nickname}' "
+                    f"для комнаты {room.id}: {exc}"
+                )
+                raise
+
+        # Атомарно обновляем счётчики комнаты после создания всех AI-игроков
+        if created_ai_players:
+            new_total: int = len(existing_players) + len(created_ai_players)
+            new_ai_count: int = room.ai_players + len(created_ai_players)
+            await self.room_crud.update(
+                db,
+                db_obj=room,
+                obj_in=schemas.RoomUpdate(
+                    current_players=new_total,
+                    ai_players=new_ai_count,
+                ),
+            )
+            logger.info(
+                f"Комната {room.id}: добавлено {len(created_ai_players)} AI-игроков. "
+                f"Итого игроков: {new_total}/{room.max_players}"
+            )
+
+        return created_ai_players
+
     async def start_game_for_room(
         self,
         db: AsyncSession,
@@ -47,6 +147,9 @@ class GameService:
     ) -> Dict[str, Any]:
         """
         Начать игру в комнате: создать State Machine и запустить её.
+
+        Если в комнате игроков больше min_players, но меньше max_players,
+        недостающие слоты дозаполняются AI-игроками перед стартом.
         """
         # Проверка, что комната существует и готова
         room = await self.room_crud.get(db, id=room_id)
@@ -56,18 +159,33 @@ class GameService:
             raise ValueError(f"Комната не в статусе waiting (статус: {room.status})")
 
         # Проверка минимального количества игроков
-        players = await self.player_crud.get_by_room(db, room_id=room_id)
+        players: List[PlayerModel] = await self.player_crud.get_by_room(
+            db, room_id=room_id
+        )
         if len(players) < room.min_players:
             raise ValueError(
                 f"Недостаточно игроков для начала игры: "
                 f"требуется {room.min_players}, сейчас {len(players)}"
             )
 
+        # Дозаполняем комнату AI-игроками, если людей меньше максимума
+        if len(players) < room.max_players:
+            ai_players_added: List[PlayerModel] = await self._fill_with_ai_players(
+                db, room, players
+            )
+            if ai_players_added:
+                # Обновляем локальный список игроков для дальнейшей работы
+                players = await self.player_crud.get_by_room(db, room_id=room_id)
+                # Перечитываем room, т.к. его счётчики были обновлены
+                updated_room = await self.room_crud.get(db, id=room_id)
+                if updated_room:
+                    room = updated_room
+
         # Обновление статуса комнаты на "playing"
         await self.room_crud.update(
             db,
             db_obj=room,
-            obj_in={"status": "playing"},
+            obj_in=schemas.RoomUpdate(status="playing"),
         )
 
         # Создание записи игры в БД (если ещё не создана)
@@ -191,16 +309,14 @@ class GameService:
         machine.night_actions[player_id] = action
         logger.info(f"Ночное действие от игрока {player_id} в комнате {room_id}: {action}")
 
-        # Уведомление через WebSocket, что действие принято (опционально)
-        await self.ws_manager.send_personal_message(
+        # Уведомление через WebSocket, что действие принято
+        await self.ws_manager.send_to_player(
+            player_id,
             {
                 "type": "night_action_accepted",
                 "player_id": player_id,
                 "action": action,
             },
-            # Нужен websocket игрока, но здесь мы его не имеем.
-            # Можно использовать менеджер для поиска соединения по player_id.
-            # Для упрощения пропустим.
         )
 
         # Если все необходимые действия получены, можно автоматически перейти к разрешению

@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
+
 from app import crud, schemas
 from app.db.session import get_db
+from app.services.room_service import room_service
 
 router = APIRouter()
 
@@ -11,11 +13,14 @@ router = APIRouter()
 async def create_room(
     room_in: schemas.RoomCreate,
     db: AsyncSession = Depends(get_db)
-):
+) -> schemas.Room:
     """
     Create a new room.
     """
-    room = await crud.room.create(db, obj_in=room_in)
+    try:
+        room = await room_service.create_room(db, room_create=room_in)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     return room
 
 
@@ -23,13 +28,16 @@ async def create_room(
 async def get_room(
     room_id: str,
     db: AsyncSession = Depends(get_db)
-):
+) -> schemas.Room:
     """
     Get a room by its room_id.
     """
-    room = await crud.room.get_by_room_id(db, room_id=room_id)
+    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
     if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Room not found",
+        )
     return room
 
 
@@ -38,37 +46,27 @@ async def join_room(
     room_id: str,
     player_in: schemas.PlayerCreate,
     db: AsyncSession = Depends(get_db)
-):
+) -> schemas.Player:
     """
     Join a room as a player.
     """
-    # First, get the room by room_id
-    room = await crud.room.get_by_room_id(db, room_id=room_id)
+    # Получаем комнату по публичному room_id (UUID-строка)
+    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
     if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
-    
-    # Check if the room is in lobby state
-    if room.status != "lobby":
-        raise HTTPException(status_code=400, detail="Room is not in lobby state")
-    
-    # Check if the room has space
-    if room.current_players >= room.max_players:
-        raise HTTPException(status_code=400, detail="Room is full")
-    
-    # Set the room_id for the player
-    player_in.room_id = room.id
-    
-    # Create the player
-    player = await crud.player.create(db, obj_in=player_in)
-    
-    # Update the room's current_players count
-    room.current_players += 1
-    if player_in.is_ai:
-        room.ai_players += 1
-    else:
-        room.human_players += 1
-    await db.commit()
-    
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Room not found",
+        )
+
+    # Устанавливаем внутренний DB-идентификатор комнаты для игрока (Pydantic v2)
+    player_in = player_in.model_copy(update={"room_id": room.id})
+
+    try:
+        player = await room_service.join_player(
+            db, room_id=room.id, player_create=player_in
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     return player
 
 
@@ -76,12 +74,15 @@ async def join_room(
 async def get_room_players(
     room_id: str,
     db: AsyncSession = Depends(get_db)
-):
+) -> List[schemas.Player]:
     """
     Get all players in a room.
     """
-    room = await crud.room.get_by_room_id(db, room_id=room_id)
+    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
     if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Room not found",
+        )
     players = await crud.player.get_by_room(db, room_id=room.id)
     return players

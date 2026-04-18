@@ -50,9 +50,9 @@ class ConnectionManager:
             logger.error(f"Error sending personal message: {e}")
             self.disconnect(websocket)
 
-    async def broadcast_to_room(self, room_id: int, message: dict):
+    async def broadcast_to_room(self, room_id: int, message: dict) -> None:
         if room_id in self.active_connections:
-            disconnected = set()
+            disconnected: Set[WebSocket] = set()
             for websocket in self.active_connections[room_id]:
                 try:
                     await websocket.send_text(json.dumps(message))
@@ -62,6 +62,31 @@ class ConnectionManager:
             # Remove disconnected websockets
             for websocket in disconnected:
                 self.disconnect(websocket)
+
+    async def send_to_player(self, player_id: int, message: dict) -> None:
+        """Send a message to a specific connected player by player_id."""
+        for websocket, pid in list(self.websocket_player.items()):
+            if pid == player_id:
+                try:
+                    await websocket.send_text(json.dumps(message))
+                except Exception as e:
+                    logger.error(f"Error sending message to player {player_id}: {e}")
+                    self.disconnect(websocket)
+                return  # player_id is unique, stop after first match
+
+    async def broadcast_to_players(self, player_ids: List[int], message: dict) -> None:
+        """Broadcast a message only to specific players by their IDs."""
+        player_id_set: Set[int] = set(player_ids)
+        disconnected: Set[WebSocket] = set()
+        for websocket, pid in list(self.websocket_player.items()):
+            if pid in player_id_set:
+                try:
+                    await websocket.send_text(json.dumps(message))
+                except Exception as e:
+                    logger.error(f"Error broadcasting to player {pid}: {e}")
+                    disconnected.add(websocket)
+        for websocket in disconnected:
+            self.disconnect(websocket)
 
     async def get_player_info(self, websocket: WebSocket, db: AsyncSession) -> dict:
         player_id = self.websocket_player.get(websocket)
