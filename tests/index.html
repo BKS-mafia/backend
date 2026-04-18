@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Mafia - Dev API Tester</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>AI Mafia - Dev API Tester</h1>
+            <div class="server-selector" style="margin: 10px 0;">
+                <label for="select-server">Сервер:</label>
+                <select id="select-server" style="padding: 5px; border-radius: 4px;">
+                    <option value="http://localhost:8000">http://localhost:8000 (Local)</option>
+                    <option value="http://91.201.252.14:8000">http://91.201.252.14:8000 (Remote)</option>
+                </select>
+            </div>
+            <div class="connection-status">
+                <span id="ws-status-indicator" class="status-indicator disconnected"></span>
+                <span id="ws-status-text">WS Disconnected</span>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <!-- Левая колонка: Управление -->
+            <div class="controls-panel">
+
+                <!-- Секция: Комнаты -->
+                <section class="card">
+                    <h2>1. Управление комнатами</h2>
+                    <div class="form-group">
+                        <button id="btn-get-rooms">Получить список комнат</button>
+                    </div>
+                    <div class="form-group">
+                        <button id="btn-create-room">Создать новую комнату</button>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-room-id">Room ID:</label>
+                        <input type="text" id="input-room-id" placeholder="UUID комнаты">
+                        <button id="btn-get-room">Инфо о комнате</button>
+                    </div>
+                </section>
+
+                <!-- Секция: Игроки -->
+                <section class="card">
+                    <h2>2. Управление игроками</h2>
+                    <div class="form-group">
+                        <label for="input-nickname">Никнейм:</label>
+                        <input type="text" id="input-nickname" value="DevPlayer">
+                    </div>
+                    <div class="form-group">
+                        <button id="btn-join-room">Присоединиться к комнате</button>
+                    </div>
+                    <div class="form-group">
+                        <button id="btn-get-players">Список игроков в комнате</button>
+                    </div>
+                    <div class="form-group">
+                        <label>Текущий Session Token:</label>
+                        <input type="text" id="input-session-token" readonly placeholder="Токен появится после входа">
+                    </div>
+                </section>
+
+                <!-- Секция: WebSocket -->
+                <section class="card">
+                    <h2>3. WebSocket & Игра</h2>
+                    <div class="form-group">
+                        <button id="btn-ws-connect">Подключиться к WS</button>
+                        <button id="btn-ws-disconnect" disabled>Отключиться</button>
+                    </div>
+                    <div class="form-group">
+                        <button id="btn-ws-ready" disabled>Отправить Ready</button>
+                        <button id="btn-ws-start" disabled>Start Game (Host)</button>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <div class="form-group">
+                        <label for="input-chat-msg">Чат:</label>
+                        <input type="text" id="input-chat-msg" placeholder="Сообщение...">
+                        <button id="btn-ws-chat" disabled>Отправить</button>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <div class="form-group">
+                        <label for="input-target-id">Target Player ID:</label>
+                        <input type="number" id="input-target-id" placeholder="ID игрока">
+                    </div>
+                    <div class="form-group">
+                        <button id="btn-ws-vote" disabled>Голосовать (День)</button>
+                    </div>
+                    <div class="form-group">
+                        <select id="select-night-action">
+                            <option value="kill">Kill (Mafia)</option>
+                            <option value="heal">Heal (Doctor)</option>
+                            <option value="check">Check (Commissioner)</option>
+                        </select>
+                        <button id="btn-ws-night-action" disabled>Ночное действие</button>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Правая колонка: Логи -->
+            <div class="logs-panel">
+                <section class="card h-100">
+                    <div class="logs-header">
+                        <h2>Логи (HTTP & WS)</h2>
+                        <button id="btn-clear-logs" class="btn-small">Очистить</button>
+                    </div>
+                    <div id="logs-container" class="logs-container"></div>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

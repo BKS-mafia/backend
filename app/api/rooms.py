@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from typing import List, Any, Dict
 
 from app import crud, schemas
@@ -40,6 +41,8 @@ async def create_room(
         room = await room_service.create_room(db, room_create=room_in)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except IntegrityError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Room with such parameters already exists")
     return room
 
 

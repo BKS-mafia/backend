@@ -1,0 +1,1378 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "AI Mafia Backend",
+        "description": "Backend для игры в мафию с AI игроками",
+        "version": "1.0.0"
+    },
+    "paths": {
+        "/api/rooms/": {
+            "get": {
+                "tags": [
+                    "rooms"
+                ],
+                "summary": "List Rooms",
+                "description": "Получить список активных лобби для браузера комнат.\nВозвращает только комнаты со статусом 'lobby' или 'starting'.",
+                "operationId": "list_rooms_api_rooms__get",
+                "parameters": [
+                    {
+                        "name": "skip",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "default": 0,
+                            "title": "Skip"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "default": 20,
+                            "title": "Limit"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/Room"
+                                    },
+                                    "title": "Response List Rooms Api Rooms  Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "rooms"
+                ],
+                "summary": "Create Room",
+                "description": "Создать новую комнату.",
+                "operationId": "create_room_api_rooms__post",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/RoomCreate"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Room"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/rooms/{room_id}": {
+            "get": {
+                "tags": [
+                    "rooms"
+                ],
+                "summary": "Get Room",
+                "description": "Получить комнату по её публичному room_id (UUID).",
+                "operationId": "get_room_api_rooms__room_id__get",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Room"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "tags": [
+                    "rooms"
+                ],
+                "summary": "Update Room",
+                "description": "Обновить настройки комнаты.\nТолько хост может менять настройки (проверка host_token через заголовок при необходимости).",
+                "operationId": "update_room_api_rooms__room_id__patch",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/RoomUpdate"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Room"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "rooms"
+                ],
+                "summary": "Delete Room",
+                "description": "Удалить комнату и уведомить подключённых игроков.",
+                "operationId": "delete_room_api_rooms__room_id__delete",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Successful Response"
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/rooms/{room_id}/join": {
+            "post": {
+                "tags": [
+                    "rooms"
+                ],
+                "summary": "Join Room",
+                "description": "Присоединиться к комнате как игрок.",
+                "operationId": "join_room_api_rooms__room_id__join_post",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/PlayerCreate"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Player"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/rooms/{room_id}/players": {
+            "get": {
+                "tags": [
+                    "rooms"
+                ],
+                "summary": "Get Room Players",
+                "description": "Получить всех игроков в комнате.",
+                "operationId": "get_room_players_api_rooms__room_id__players_get",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/Player"
+                                    },
+                                    "title": "Response Get Room Players Api Rooms  Room Id  Players Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/rooms/{room_id}/game": {
+            "get": {
+                "tags": [
+                    "rooms"
+                ],
+                "summary": "Get Room Game",
+                "description": "Получить текущую игровую сессию для комнаты.",
+                "operationId": "get_room_game_api_rooms__room_id__game_get",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Game"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/rooms/{room_id}/game/state": {
+            "get": {
+                "tags": [
+                    "rooms"
+                ],
+                "summary": "Get Game State",
+                "description": "Получить текущую фазу игры, номер дня, список живых игроков.",
+                "operationId": "get_game_state_api_rooms__room_id__game_state_get",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Get Game State Api Rooms  Room Id  Game State Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/rooms/{room_id}/game/start": {
+            "post": {
+                "tags": [
+                    "rooms"
+                ],
+                "summary": "Start Game",
+                "description": "HTTP-альтернатива WebSocket start_game событию.\nЗапускает игру в комнате.",
+                "operationId": "start_game_api_rooms__room_id__game_start_post",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Room Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Start Game Api Rooms  Room Id  Game Start Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/rooms/{room_id}/game/events": {
+            "get": {
+                "tags": [
+                    "rooms"
+                ],
+                "summary": "Get Game Events",
+                "description": "Получить историю событий текущей игры в комнате.",
+                "operationId": "get_game_events_api_rooms__room_id__game_events_get",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Room Id"
+                        }
+                    },
+                    {
+                        "name": "skip",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "default": 0,
+                            "title": "Skip"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer",
+                            "default": 100,
+                            "title": "Limit"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/GameEvent"
+                                    },
+                                    "title": "Response Get Game Events Api Rooms  Room Id  Game Events Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/rooms/{room_id}/players/{player_id}": {
+            "delete": {
+                "tags": [
+                    "rooms"
+                ],
+                "summary": "Kick Player",
+                "description": "Удалить игрока из комнаты (кик через HTTP).",
+                "operationId": "kick_player_api_rooms__room_id__players__player_id__delete",
+                "parameters": [
+                    {
+                        "name": "room_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Room Id"
+                        }
+                    },
+                    {
+                        "name": "player_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Player Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Successful Response"
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/players/{player_id}": {
+            "get": {
+                "tags": [
+                    "players"
+                ],
+                "summary": "Get Player",
+                "description": "Получить публичный профиль игрока по его внутреннему ID.",
+                "operationId": "get_player_api_players__player_id__get",
+                "parameters": [
+                    {
+                        "name": "player_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "title": "Player Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Player"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/reconnect": {
+            "post": {
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Reconnect",
+                "description": "Восстановить сессию по session_token.\nВозвращает информацию об игроке и его текущей комнате.",
+                "operationId": "reconnect_api_auth_reconnect_post",
+                "parameters": [
+                    {
+                        "name": "session_token",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Session Token"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "title": "Response Reconnect Api Auth Reconnect Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/health": {
+            "get": {
+                "tags": [
+                    "health"
+                ],
+                "summary": "Health Check",
+                "description": "Проверка состояния приложения.\nВозвращает статус работы сервиса и версию.",
+                "operationId": "health_check_health_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/": {
+            "get": {
+                "tags": [
+                    "root"
+                ],
+                "summary": "Root",
+                "description": "Корневой эндпоинт с информацией о приложении.",
+                "operationId": "root__get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "Game": {
+                "properties": {
+                    "room_id": {
+                        "type": "integer",
+                        "title": "Room Id"
+                    },
+                    "status": {
+                        "type": "string",
+                        "title": "Status"
+                    },
+                    "day_number": {
+                        "type": "integer",
+                        "title": "Day Number",
+                        "default": 1
+                    },
+                    "night_actions": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": true,
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Night Actions"
+                    },
+                    "voting_results": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": true,
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Voting Results"
+                    },
+                    "winner": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Winner"
+                    },
+                    "id": {
+                        "type": "integer",
+                        "title": "Id"
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Created At"
+                    },
+                    "updated_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Updated At"
+                    },
+                    "turing_votes": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": true,
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Turing Votes"
+                    },
+                    "humanness_scores": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": true,
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Humanness Scores"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "room_id",
+                    "status",
+                    "id",
+                    "created_at"
+                ],
+                "title": "Game"
+            },
+            "GameEvent": {
+                "properties": {
+                    "game_id": {
+                        "type": "integer",
+                        "title": "Game Id"
+                    },
+                    "player_id": {
+                        "type": "integer",
+                        "title": "Player Id"
+                    },
+                    "event_type": {
+                        "type": "string",
+                        "title": "Event Type"
+                    },
+                    "event_data": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": true,
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Event Data"
+                    },
+                    "id": {
+                        "type": "integer",
+                        "title": "Id"
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Created At"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "game_id",
+                    "player_id",
+                    "event_type",
+                    "id",
+                    "created_at"
+                ],
+                "title": "GameEvent"
+            },
+            "HTTPValidationError": {
+                "properties": {
+                    "detail": {
+                        "items": {
+                            "$ref": "#/components/schemas/ValidationError"
+                        },
+                        "type": "array",
+                        "title": "Detail"
+                    }
+                },
+                "type": "object",
+                "title": "HTTPValidationError"
+            },
+            "Player": {
+                "properties": {
+                    "player_id": {
+                        "type": "string",
+                        "title": "Player Id"
+                    },
+                    "room_id": {
+                        "type": "integer",
+                        "title": "Room Id"
+                    },
+                    "nickname": {
+                        "type": "string",
+                        "title": "Nickname"
+                    },
+                    "is_ai": {
+                        "type": "boolean",
+                        "title": "Is Ai",
+                        "default": false
+                    },
+                    "role": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Role"
+                    },
+                    "is_alive": {
+                        "type": "boolean",
+                        "title": "Is Alive",
+                        "default": true
+                    },
+                    "is_connected": {
+                        "type": "boolean",
+                        "title": "Is Connected",
+                        "default": true
+                    },
+                    "session_token": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Session Token"
+                    },
+                    "id": {
+                        "type": "integer",
+                        "title": "Id"
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Created At"
+                    },
+                    "updated_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Updated At"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "player_id",
+                    "room_id",
+                    "nickname",
+                    "id",
+                    "created_at"
+                ],
+                "title": "Player"
+            },
+            "PlayerCreate": {
+                "properties": {
+                    "player_id": {
+                        "type": "string",
+                        "title": "Player Id"
+                    },
+                    "room_id": {
+                        "type": "integer",
+                        "title": "Room Id"
+                    },
+                    "nickname": {
+                        "type": "string",
+                        "title": "Nickname"
+                    },
+                    "is_ai": {
+                        "type": "boolean",
+                        "title": "Is Ai",
+                        "default": false
+                    },
+                    "role": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Role"
+                    },
+                    "is_alive": {
+                        "type": "boolean",
+                        "title": "Is Alive",
+                        "default": true
+                    },
+                    "is_connected": {
+                        "type": "boolean",
+                        "title": "Is Connected",
+                        "default": true
+                    },
+                    "session_token": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Session Token"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "player_id",
+                    "room_id",
+                    "nickname"
+                ],
+                "title": "PlayerCreate"
+            },
+            "RoleConfig": {
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "title": "Name"
+                    },
+                    "count": {
+                        "type": "integer",
+                        "title": "Count"
+                    },
+                    "canBeHuman": {
+                        "type": "boolean",
+                        "title": "Canbehuman",
+                        "default": true
+                    },
+                    "canBeAI": {
+                        "type": "boolean",
+                        "title": "Canbeai",
+                        "default": true
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "name",
+                    "count"
+                ],
+                "title": "RoleConfig"
+            },
+            "Room": {
+                "properties": {
+                    "room_id": {
+                        "type": "string",
+                        "title": "Room Id"
+                    },
+                    "host_token": {
+                        "type": "string",
+                        "title": "Host Token"
+                    },
+                    "status": {
+                        "type": "string",
+                        "title": "Status"
+                    },
+                    "totalPlayers": {
+                        "type": "integer",
+                        "title": "Totalplayers",
+                        "default": 8
+                    },
+                    "aiCount": {
+                        "type": "integer",
+                        "title": "Aicount",
+                        "default": 3
+                    },
+                    "peopleCount": {
+                        "type": "integer",
+                        "title": "Peoplecount",
+                        "default": 5
+                    },
+                    "roles": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "$ref": "#/components/schemas/RoleConfig"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Roles"
+                    },
+                    "current_players": {
+                        "type": "integer",
+                        "title": "Current Players",
+                        "default": 0
+                    },
+                    "ai_players": {
+                        "type": "integer",
+                        "title": "Ai Players",
+                        "default": 0
+                    },
+                    "human_players": {
+                        "type": "integer",
+                        "title": "Human Players",
+                        "default": 0
+                    },
+                    "settings": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": true,
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Settings"
+                    },
+                    "id": {
+                        "type": "integer",
+                        "title": "Id"
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Created At"
+                    },
+                    "updated_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Updated At"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "room_id",
+                    "host_token",
+                    "status",
+                    "id",
+                    "created_at"
+                ],
+                "title": "Room"
+            },
+            "RoomCreate": {
+                "properties": {
+                    "room_id": {
+                        "type": "string",
+                        "title": "Room Id"
+                    },
+                    "host_token": {
+                        "type": "string",
+                        "title": "Host Token"
+                    },
+                    "status": {
+                        "type": "string",
+                        "title": "Status"
+                    },
+                    "totalPlayers": {
+                        "type": "integer",
+                        "title": "Totalplayers",
+                        "default": 8
+                    },
+                    "aiCount": {
+                        "type": "integer",
+                        "title": "Aicount",
+                        "default": 3
+                    },
+                    "peopleCount": {
+                        "type": "integer",
+                        "title": "Peoplecount",
+                        "default": 5
+                    },
+                    "roles": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "$ref": "#/components/schemas/RoleConfig"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Roles"
+                    },
+                    "current_players": {
+                        "type": "integer",
+                        "title": "Current Players",
+                        "default": 0
+                    },
+                    "ai_players": {
+                        "type": "integer",
+                        "title": "Ai Players",
+                        "default": 0
+                    },
+                    "human_players": {
+                        "type": "integer",
+                        "title": "Human Players",
+                        "default": 0
+                    },
+                    "settings": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": true,
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Settings"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "room_id",
+                    "host_token",
+                    "status"
+                ],
+                "title": "RoomCreate"
+            },
+            "RoomUpdate": {
+                "properties": {
+                    "status": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Status"
+                    },
+                    "totalPlayers": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Totalplayers"
+                    },
+                    "aiCount": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Aicount"
+                    },
+                    "peopleCount": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Peoplecount"
+                    },
+                    "roles": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "$ref": "#/components/schemas/RoleConfig"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Roles"
+                    },
+                    "current_players": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Current Players"
+                    },
+                    "ai_players": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Ai Players"
+                    },
+                    "human_players": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Human Players"
+                    },
+                    "settings": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": true,
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Settings"
+                    }
+                },
+                "type": "object",
+                "title": "RoomUpdate"
+            },
+            "ValidationError": {
+                "properties": {
+                    "loc": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "type": "array",
+                        "title": "Location"
+                    },
+                    "msg": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "type": {
+                        "type": "string",
+                        "title": "Error Type"
+                    },
+                    "input": {
+                        "title": "Input"
+                    },
+                    "ctx": {
+                        "type": "object",
+                        "title": "Context"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "loc",
+                    "msg",
+                    "type"
+                ],
+                "title": "ValidationError"
+            }
+        }
+    }
+}

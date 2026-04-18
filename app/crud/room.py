@@ -35,6 +35,16 @@ class RoomCRUD:
         if not host_token:
             host_token = str(uuid.uuid4())
 
+        # Проверка уникальности room_id
+        existing_room = await self.get_by_room_id(db, room_id=room_id)
+        if existing_room:
+            raise ValueError(f"Room with room_id '{room_id}' already exists")
+
+        # Проверка уникальности host_token
+        existing_host = await self.get_by_host_token(db, host_token=host_token)
+        if existing_host:
+            raise ValueError(f"Room with host_token '{host_token}' already exists")
+
         roles_json = None
         if obj_in.roles:
             roles_dict = {k: v.model_dump(by_alias=True) for k, v in obj_in.roles.items()}
