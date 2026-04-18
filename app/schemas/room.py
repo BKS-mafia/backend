@@ -31,6 +31,7 @@ class RoomBase(BaseModel):
 
 
 class RoomCreate(BaseModel):
+    room_id: Optional[str] = Field(default=None, description="Уникальный ID комнаты. Если не передан, будет сгенерирован автоматически")
     host_token: str
     total_players: int = Field(alias="totalPlayers", default=8)
     ai_count: int = Field(alias="aiCount", default=3)

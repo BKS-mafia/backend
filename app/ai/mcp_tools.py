@@ -186,6 +186,9 @@ class MCPToolDispatcher:
             except (json.JSONDecodeError, TypeError):
                 tool_args = {}
 
+            # Логируем вызов инструмента
+            logger.info(f"[MCP] Player {player_id} used tool: {tool_name} with args: {tool_args}")
+
             result = await self.dispatch(tool_name, tool_args, player_id)
             results.append(
                 {

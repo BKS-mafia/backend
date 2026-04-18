@@ -1,5 +1,6 @@
 import asyncio
 import random
+import time
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set
 from app.models.room import Room, RoomStatus
@@ -65,6 +66,15 @@ class StateMachine:
         self.winner: Optional[str] = None
         # Голоса в Тесте Тьюринга: {suspect_player_id: [voter_id_1, ...]}
         self.turing_votes: Dict[int, List[int]] = {}
+        
+        # Счётчик ошибок AI для каждого бота: {player_id: error_count}
+        self.ai_error_counts: Dict[int, int] = {}
+        # Последнее fallback-сообщение для каждого бота (чтобы не повторять)
+        self.ai_last_fallback: Dict[int, str] = {}
+        # Трекинг последнего отправленного сообщения для защиты от дублирования
+        self.ai_last_message: Dict[int, str] = {}
+        # Таймстемп последнего сообщения для защиты от дублирования
+        self.ai_last_message_time: Dict[int, float] = {}
 
         self._register_dispatcher_callbacks()
 
@@ -185,6 +195,20 @@ class StateMachine:
         logger.info(f"_process_ai_chat_message called: player_id={player_id}, content='{content}'")
         logger.info(f"  self.players: {[(p.id, p.nickname, p.is_alive) for p in self.players]}")
         
+        # Защита от дублирования: проверяем, не отправлялось ли это сообщение недавно
+        current_time = time.time()
+        last_msg = self.ai_last_message.get(player_id, "")
+        last_time = self.ai_last_message_time.get(player_id, 0)
+        
+        # Если сообщение то же самое и прошло меньше 5 секунд - игнорируем
+        if last_msg == content and (current_time - last_time) < 5:
+            logger.warning(f"Duplicate message detected for player {player_id}: '{content}' (last sent {current_time - last_time:.1f}s ago)")
+            return {"ok": True, "duplicate": True}
+        
+        # Обновляем трекинг
+        self.ai_last_message[player_id] = content
+        self.ai_last_message_time[player_id] = current_time
+        
         player = next((p for p in self.players if p.id == player_id), None)
         if not player:
             logger.warning(f"Player {player_id} NOT FOUND in self.players")
@@ -204,6 +228,20 @@ class StateMachine:
         }
         self.day_chat_history.append(msg)
 
+        # Сохраняем событие в БД
+        if self.db and self.game_id:
+            try:
+                event = GameEvent(
+                    game_id=self.game_id,
+                    player_id=player_id,
+                    event_type="chat",
+                    event_data=json.dumps({"content": content, "nickname": player.nickname})
+                )
+                self.db.add(event)
+                await self.db.commit()
+            except Exception as e:
+                logger.error(f"Failed to save chat event: {e}")
+
         # Разослать всем игрокам комнаты
         logger.info(f"Broadcasting chat message from player {player_id}: {content}")
         await self._broadcast({
@@ -217,6 +255,21 @@ class StateMachine:
         if player_id not in self.votes:
             self.votes[player_id] = target_player_id
             player = next((p for p in self.players if p.id == player_id), None)
+            
+            # Сохраняем событие в БД
+            if self.db and self.game_id:
+                try:
+                    event = GameEvent(
+                        game_id=self.game_id,
+                        player_id=player_id,
+                        event_type="vote",
+                        event_data=json.dumps({"target_player_id": target_player_id})
+                    )
+                    self.db.add(event)
+                    await self.db.commit()
+                except Exception as e:
+                    logger.error(f"Failed to save vote event: {e}")
+            
             await self._broadcast({
                 "event": "vote_cast",
                 "data": {
@@ -239,6 +292,21 @@ class StateMachine:
             "action": action_type,
             "target_id": target_player_id,
         }
+        
+        # Сохраняем событие в БД
+        if self.db and self.game_id:
+            try:
+                event = GameEvent(
+                    game_id=self.game_id,
+                    player_id=player_id,
+                    event_type="night_action",
+                    event_data=json.dumps({"action_type": action_type, "target_player_id": target_player_id})
+                )
+                self.db.add(event)
+                await self.db.commit()
+            except Exception as e:
+                logger.error(f"Failed to save night action event: {e}")
+        
         return {"ok": True, "action": action_type, "target": target_player_id}
 
     # ------------------------------------------------------------------
@@ -696,9 +764,16 @@ class StateMachine:
                     if not result or result.get("error"):
                         raise Exception(f"AI returned error or empty result: {result}")
                 except Exception as e:
-                    logger.error(f"AI day message error (player_id={bot.id}): {e}")
-                    # Fallback: отправляем случайное сообщение если API недоступен
+                    # Увеличиваем счётчик ошибок для этого бота
+                    self.ai_error_counts[bot.id] = self.ai_error_counts.get(bot.id, 0) + 1
+                    error_count = self.ai_error_counts[bot.id]
+                    
+                    logger.error(f"AI day message error (player_id={bot.id}, error_count={error_count}): {e}")
+                    
+                    # Fallback: отправляем разнообразное сообщение если API недоступен
+                    # Добавляем больше разнообразных сообщений для разных ролей
                     fallback_messages = [
+                        # Общие сообщения
                         "Интересно, кто же мафия?",
                         "Нужно внимательнее следить за поведением игроков.",
                         "Я доверяю этому игроку.",
@@ -707,8 +782,36 @@ class StateMachine:
                         "Я мирный житель, не голосуйте за меня.",
                         "Нужно больше информации.",
                         "Слушаю ваши аргументы.",
+                        # Дополнительные сообщения для разнообразия
+                        "Интересная точка зрения, нужно подумать.",
+                        "Я пока не определился, давайте послушаем других.",
+                        "Обратите внимание на поведение этого игрока.",
+                        "Мне кажется, мы что-то упускаем.",
+                        "Нужно голосовать внимательнее.",
+                        "Кто-то явно нервничает.",
+                        "Давайте соберём больше фактов.",
+                        "Я слежу за реакциями игроков.",
+                        "Пока слишком рано делать выводы.",
+                        "Нужно выслушать все мнения.",
                     ]
-                    fallback_msg = random.choice(fallback_messages)
+                    
+                    # Получаем последнее использованное сообщение этого бота
+                    last_msg = self.ai_last_fallback.get(bot.id, "")
+                    
+                    # Фильтруем: исключаем последнее использованное сообщение
+                    available_messages = [m for m in fallback_messages if m != last_msg]
+                    
+                    # Если все сообщения были использованы (маловероятно), сбрасываем
+                    if not available_messages:
+                        available_messages = fallback_messages.copy()
+                    
+                    # Выбираем случайное сообщение из доступных
+                    fallback_msg = random.choice(available_messages)
+                    
+                    # Сохраняем для следующего раза
+                    self.ai_last_fallback[bot.id] = fallback_msg
+                    
+                    logger.info(f"AI fallback message for player {bot.id} (error #{error_count}): {fallback_msg}")
                     await self._process_ai_chat_message(bot.id, fallback_msg)
 
                 await self._broadcast(

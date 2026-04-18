@@ -23,8 +23,10 @@ class RoomCRUD:
         # Статус автоматически устанавливается в "lobby" при создании
         status_enum = RoomStatus.LOBBY
 
-        # Генерируем room_id
-        room_id = str(uuid.uuid4())
+        # Используем переданный room_id или генерируем новый
+        room_id = obj_in.room_id.strip() if obj_in.room_id else None
+        if not room_id:
+            room_id = str(uuid.uuid4())
 
         # Генерируем host_token, если не предоставлен
         host_token = obj_in.host_token.strip() if obj_in.host_token else None

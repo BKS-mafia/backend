@@ -5,7 +5,7 @@ from datetime import datetime
 
 class PlayerBase(BaseModel):
     player_id: str
-    room_id: int
+    room_id: Optional[int] = None  # Опционально - API установит из URL
     nickname: str
     is_ai: bool = False
     role: Optional[str] = None

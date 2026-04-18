@@ -127,38 +127,111 @@ class AIService:
         ]
         return messages
 
-    def _build_system_prompt(self, player: Any) -> str:
+    def _build_system_prompt(self, player: Any, game_context: Optional[Dict[str, Any]] = None) -> str:
         """
         Построить системный промпт для игрока.
 
         Принимает AICharacter, экземпляр модели Player (с атрибутами ``role``,
         ``name``) или словарь с теми же ключами.
+        
+        game_context может содержать:
+        - player_index: порядковый номер бота (1-based)
+        - total_players: общее количество игроков
+        - alive_count: количество живых игроков
         """
         if isinstance(player, AICharacter):
             role = player.role
             name = player.name
             personality = player.personality
             speaking_style = player.speaking_style
+            player_id = getattr(player, "id", 0)
         elif isinstance(player, dict):
             role = player.get("role", "civilian")
             name = player.get("name", "Unknown")
             personality = player.get("personality", "Нейтральный")
             speaking_style = player.get("speaking_style", "Обычный")
+            player_id = player.get("id", 0)
         else:
             # SQLAlchemy-модель или dataclass с атрибутами
             role = getattr(player, "role", "civilian")
             name = getattr(player, "name", "Unknown")
             personality = getattr(player, "personality", "Нейтральный")
             speaking_style = getattr(player, "speaking_style", "Обычный")
+            player_id = getattr(player, "id", 0)
+
+        # Получаем контекст игры
+        player_index = 1
+        total_players = 7
+        alive_count = 7
+        if game_context:
+            player_index = game_context.get("player_index", 1)
+            total_players = game_context.get("total_players", 7)
+            alive_count = game_context.get("alive_count", 7)
+
+        # Генерируем уникальные личные качества на основе ID бота
+        unique_traits = self._generate_unique_traits(player_id, name)
+        
+        # Ролевое поведение
+        role_behavior = self._get_role_behavior(role)
 
         return (
-            f"Ты игрок в мафию с ролью {role}. Твоё имя: {name}.\n"
-            f"Характер: {personality}\n"
-            f"Стиль речи: {speaking_style}\n\n"
+            f"Ты — игрок в мафию по имени {name}.\n"
+            f"Твой уникальный ID в игре: {player_id}\n"
+            f"Ты — игрок #{player_index} из {total_players} (осталось {alive_count} живых).\n"
+            f"Твоя роль: {role}\n"
+            f"{role_behavior}\n"
+            f"Твой характер: {personality}\n"
+            f"Твои личные качества (делают тебя уникальным): {unique_traits}\n"
+            f"Твой стиль речи: {speaking_style}\n\n"
+            "ВАЖНО: Ты должен говорить ИНАЧЕ, чем другие игроки, даже в одинаковой ситуации.\n"
+            "Не повторяй фразы других. Выражай своё мнение по-своему.\n"
             "Ты находишься в игровом чате. Отвечай так, как будто ты реальный игрок.\n"
             "Не раскрывай свою роль явно, если это не требуется по сценарию.\n"
             "Используй доступные инструменты (tools) для выполнения игровых действий."
         )
+
+    def _generate_unique_traits(self, player_id: int, name: str) -> str:
+        """
+        Генерирует уникальные личные качества для бота на основе его ID.
+        Это обеспечивает разнообразие ответов даже при одинаковой роли.
+        """
+        # Используем ID для детерминированного выбора качеств
+        traits_pool = [
+            "Склонен к паранойе и подозрительности",
+            "Оптимистичный и доверчивый",
+            "Аналитический ум, любит факты",
+            "Эмоциональный, часто меняет мнение",
+            "Спокойный и наблюдательный",
+            "Агрессивный и конфронтационный",
+            "Тактичный и дипломатичный",
+            "Саркастичный юмор",
+            "Прямой и честный",
+            "Скрытный и загадочный",
+            "Склонен к импровизации",
+            "Любит подмечать детали",
+            "Редко говорит, но метко",
+            "Часто задаёт вопросы",
+            "Склонен к крайностям",
+            "Прагматичный и расчётливый",
+            "Импульсивный",
+            "Внимательный к настроению группы",
+            "Независимое мышление",
+            "Следует за лидером",
+        ]
+        
+        # Детерминированный выбор на основе ID
+        idx = (player_id * 7 + len(name)) % len(traits_pool)
+        return traits_pool[idx]
+
+    def _get_role_behavior(self, role: str) -> str:
+        """Возвращает описание поведения для конкретной роли."""
+        behaviors = {
+            "mafia": "Ты мафия. Твоя цель — уничтожить мирных жителей. Ты должен скрывать свою роль и стараться направить подозрения на других.",
+            "civilian": "Ты мирный житель. Твоя цель — найти и вывести мафию. Анализируй поведение игроков и вычисляй преступников.",
+            "doctor": "Ты доктор. Ты можешь защитить одного игрока каждую ночь. Действуй осторожно, чтобы не раскрыть себя.",
+            "commissioner": "Ты комиссар. Ты можешь узнать роль игрока ночью. Собирай информацию и используй её в нужный момент.",
+        }
+        return behaviors.get(role, "Ты мирный житель.")
 
     async def generate_response(
         self,
@@ -449,7 +522,17 @@ class AIService:
             return results[0] if results else {}
         except Exception as e:
             logger.error(f"request_day_message ошибка (player_id={player_id}): {e}")
-            return {"error": str(e)}
+            logger.exception("Полный стек ошибки:")
+            # Более подробное логирование - возвращаем структурированную информацию
+            error_type = type(e).__name__
+            error_details = {
+                "error": str(e),
+                "error_type": error_type,
+                "player_id": player_id,
+                "has_client": self.client is not None,
+            }
+            logger.error(f"Детали ошибки AI: {error_details}")
+            return error_details
 
     async def request_vote(
         self,

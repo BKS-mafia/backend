@@ -102,7 +102,7 @@ class AITestRunner:
                     json=payload,
                     timeout=10.0
                 )
-                if response.status_code == 201:
+                if response.status_code in (200, 201):
                     data = response.json()
                     self.session_token = data.get("session_token")
                     await self.log(f"Присоединён к комнате", "SUCCESS")
@@ -161,7 +161,7 @@ class AITestRunner:
             except:
                 pass
         return []
-    
+
     async def get_game_state(self):
         """Получить состояние игры."""
         async with httpx.AsyncClient() as client:
@@ -175,6 +175,27 @@ class AITestRunner:
             except:
                 pass
         return None
+
+    async def get_game_events(self, limit: int = 50):
+        """Получить события игры (сообщения, голосования, действия)."""
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(
+                    f"{self.server_url}/api/rooms/{self.room_id}/game/events?limit={limit}",
+                    timeout=10.0
+                )
+                if response.status_code == 200:
+                    return response.json()
+            except:
+                pass
+        return []
+
+    async def get_player_name(self, players: list, player_id: int) -> str:
+        """Получить имя игрока по ID."""
+        for p in players:
+            if p.get("id") == player_id:
+                return p.get("nickname", f"Player_{player_id}")
+        return f"Player_{player_id}"
     
     async def run(self):
         """Основной метод запуска теста."""
@@ -210,6 +231,7 @@ class AITestRunner:
         """Мониторинг игры в течение указанного времени."""
         start_time = asyncio.get_event_loop().time()
         duration = 90  # секунд
+        shown_event_ids = set()  # Отслеживаем уже показанные события
         
         while asyncio.get_event_loop().time() - start_time < duration:
             await asyncio.sleep(5)
@@ -227,6 +249,53 @@ class AITestRunner:
                 if phase == "finished" or phase == "turing_test":
                     await self.log("Игра завершена!", "SUCCESS")
                     break
+            
+            # Получаем события игры (сообщения, голосования, действия)
+            events = await self.get_game_events(limit=100)
+            if events:
+                players = await self.get_players()
+                # Показываем только новые события (которые ещё не показывали)
+                for event in reversed(events):
+                    event_id = event.get("id")
+                    if event_id in shown_event_ids:
+                        continue
+                    shown_event_ids.add(event_id)
+                    
+                    event_type = event.get("event_type", "")
+                    event_data = event.get("event_data", {})
+                    player_id = event.get("player_id")
+                    player_name = await self.get_player_name(players, player_id) if players else f"Player_{player_id}"
+                    
+                    if event_type in ("chat", "chat_mafia"):
+                        # Сообщение в чате
+                        content = event_data.get("content", "")
+                        if content:
+                            chat_type = "[МАФИЯ]" if event_type == "chat_mafia" else ""
+                            await self.log(f"  {player_name}{chat_type}: {content}", "CHAT")
+                    
+                    elif event_type == "vote":
+                        # Голосование
+                        target_id = event_data.get("target_player_id")
+                        target_name = await self.get_player_name(players, target_id) if players else f"Player_{target_id}"
+                        await self.log(f"  -> {player_name} проголосовал за {target_name}", "VOTE")
+                    
+                    elif event_type in ("night_action", "action"):
+                        # Ночное действие
+                        action_type = event_data.get("action_type", "unknown")
+                        target_id = event_data.get("target_player_id")
+                        target_name = await self.get_player_name(players, target_id) if players else f"Player_{target_id}"
+                        
+                        action_desc = {
+                            "kill": "убил",
+                            "heal": "вылечил",
+                            "investigate": "проверил"
+                        }.get(action_type, action_type)
+                        
+                        await self.log(f"  -> {player_name} {action_desc} {target_name} (ночь)", "ACTION")
+                    
+                    elif event_type == "eliminated":
+                        # Игрок eliminated
+                        await self.log(f"  !! {player_name} был eliminated", "ELIMINATED")
             
             # Проверяем игроков
             players = await self.get_players()
