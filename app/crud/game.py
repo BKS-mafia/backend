@@ -7,6 +7,9 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app import schemas
 from app.models.game import Game as GameModel, GameStatus
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class GameCRUD:
@@ -129,4 +132,28 @@ class GameCRUD:
 
         await db.delete(game)
         await db.commit()
+        return game
+
+    async def save_turing_results(
+        self,
+        db: AsyncSession,
+        game_id: int,
+        turing_votes: dict,
+        humanness_scores: dict,
+    ) -> Optional[GameModel]:
+        """
+        Сохранить результаты теста Тьюринга:
+        turing_votes   — словарь голосов {"player_id": [voter_id_1, voter_id_2], ...}
+        humanness_scores — словарь скоров "человечности" {"player_id": 0.75, ...}
+        """
+        game = await self.get(db, id=game_id)
+        if not game:
+            logger.warning(f"save_turing_results: игра {game_id} не найдена")
+            return None
+
+        game.turing_votes = turing_votes
+        game.humanness_scores = humanness_scores
+
+        await db.commit()
+        await db.refresh(game)
         return game

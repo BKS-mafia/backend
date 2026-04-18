@@ -23,16 +23,24 @@ class OpenRouterClient:
 
     async def generate_response(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         stream: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Any = "auto",
     ) -> Dict[str, Any]:
         """
         Generate a response from the OpenRouter API.
+
+        Returns the full ``message`` object from ``choices[0]``, which includes
+        ``content`` as well as ``tool_calls`` when the model invokes a tool.
+
+        Backward-compatible: callers that don't pass ``tools`` continue to work
+        because the returned message still has a ``content`` key.
         """
-        payload = {
+        payload: Dict[str, Any] = {
             "model": model or self.default_model,
             "messages": messages,
             "temperature": temperature,
@@ -40,6 +48,9 @@ class OpenRouterClient:
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice
 
         async with httpx.AsyncClient() as client:
             try:
@@ -50,7 +61,9 @@ class OpenRouterClient:
                     timeout=30.0,
                 )
                 response.raise_for_status()
-                return response.json()
+                data = response.json()
+                # Возвращаем полный объект message (включая tool_calls если есть)
+                return data["choices"][0]["message"]
             except httpx.HTTPStatusError as e:
                 logger.error(f"OpenRouter API returned an error: {e.response.text}")
                 raise

@@ -4,12 +4,21 @@
 Управление "характерами" AI (prompt-профили).
 Имитация набора текста (типинг) и задержки ответов.
 """
+from __future__ import annotations
+
 import asyncio
 import logging
 import random
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
+
 from app.ai.openrouter_client import OpenRouterClient
+from app.ai.mcp_tools import (
+    DAY_TOOLS,
+    NIGHT_TOOLS,
+    VOTE_TOOLS,
+    MCPToolDispatcher,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +127,39 @@ class AIService:
         ]
         return messages
 
+    def _build_system_prompt(self, player: Any) -> str:
+        """
+        Построить системный промпт для игрока.
+
+        Принимает AICharacter, экземпляр модели Player (с атрибутами ``role``,
+        ``name``) или словарь с теми же ключами.
+        """
+        if isinstance(player, AICharacter):
+            role = player.role
+            name = player.name
+            personality = player.personality
+            speaking_style = player.speaking_style
+        elif isinstance(player, dict):
+            role = player.get("role", "civilian")
+            name = player.get("name", "Unknown")
+            personality = player.get("personality", "Нейтральный")
+            speaking_style = player.get("speaking_style", "Обычный")
+        else:
+            # SQLAlchemy-модель или dataclass с атрибутами
+            role = getattr(player, "role", "civilian")
+            name = getattr(player, "name", "Unknown")
+            personality = getattr(player, "personality", "Нейтральный")
+            speaking_style = getattr(player, "speaking_style", "Обычный")
+
+        return (
+            f"Ты игрок в мафию с ролью {role}. Твоё имя: {name}.\n"
+            f"Характер: {personality}\n"
+            f"Стиль речи: {speaking_style}\n\n"
+            "Ты находишься в игровом чате. Отвечай так, как будто ты реальный игрок.\n"
+            "Не раскрывай свою роль явно, если это не требуется по сценарию.\n"
+            "Используй доступные инструменты (tools) для выполнения игровых действий."
+        )
+
     async def generate_response(
         self,
         context: str,
@@ -137,8 +179,8 @@ class AIService:
             thinking_delay = random.uniform(0.5, 2.0)
             await asyncio.sleep(thinking_delay)
 
-            # Имитируем набор текста: вычисляем примерное время набора на основе количества слов
-            # в ожидаемом ответе (оцениваем по max_tokens)
+            # Имитируем набор текста: вычисляем примерное время набора на основе
+            # количества слов в ожидаемом ответе (оцениваем по max_tokens)
             estimated_words = character.max_tokens // 3  # грубо
             typing_speed_wpm = random.randint(*self.typing_speed_range)
             # Время набора в секундах: слова / (слов в минуту / 60)
@@ -148,29 +190,26 @@ class AIService:
             await asyncio.sleep(typing_delay)
 
         # Генерация ответа через OpenRouter API
+        # generate_response теперь возвращает message-объект (dict), а не полный ответ API
+        ai_text = "(AI не дал ответа)"
         try:
-            response = await self.client.generate_response(
+            message = await self.client.generate_response(
                 messages=messages,
                 temperature=character.temperature,
                 max_tokens=character.max_tokens,
                 stream=False,
             )
-            # Извлечение текста ответа
-            ai_text = response.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if not ai_text:
-                ai_text = "(AI не дал ответа)"
+            # message — это {"role": "assistant", "content": "...", ...}
+            ai_text = message.get("content") or ai_text
         except Exception as e:
             logger.error(f"Ошибка генерации AI: {e}")
             ai_text = "Произошла ошибка. Пропускаю ход."
-
-        # Если simulate_typing, можно также имитировать паузы между предложениями
-        # (опционально)
 
         return {
             "text": ai_text,
             "character": character.name,
             "role": character.role,
-            "tokens_used": response.get("usage", {}).get("total_tokens", 0) if "response" in locals() else 0,
+            "tokens_used": 0,
         }
 
     async def generate_structured_response(
@@ -248,6 +287,166 @@ class AIService:
             }
             for key, char in self.characters.items()
         ]
+
+
+    # ------------------------------------------------------------------
+    # MCP Tool-calling методы
+    # ------------------------------------------------------------------
+
+    def _build_game_context_message(self, context: dict) -> str:
+        """Форматировать game_context в строку для ИИ."""
+        lines: List[str] = []
+        phase = context.get("phase", "unknown")
+        lines.append(f"Current game phase: {phase}")
+
+        if "night_number" in context:
+            lines.append(f"Night number: {context['night_number']}")
+
+        alive = context.get("alive_players", [])
+        if alive:
+            alive_names = ", ".join(
+                [p.get("name", str(p.get("id", "?"))) if isinstance(p, dict) else getattr(p, "name", str(getattr(p, "id", "?"))) for p in alive]
+            )
+            lines.append(f"Alive players: {alive_names}")
+
+        dead = context.get("dead_players", [])
+        if dead:
+            dead_names = ", ".join(
+                [p.get("name", str(p.get("id", "?"))) if isinstance(p, dict) else getattr(p, "name", str(getattr(p, "id", "?"))) for p in dead]
+            )
+            lines.append(f"Dead players: {dead_names}")
+
+        recent_messages = context.get("recent_messages", [])
+        if recent_messages:
+            lines.append("\nRecent chat messages:")
+            for msg in recent_messages[-10:]:  # последние 10
+                sender = msg.get("sender_name", "Unknown") if isinstance(msg, dict) else getattr(msg, "sender_name", "Unknown")
+                content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+                lines.append(f"  {sender}: {content}")
+
+        day_history = context.get("day_chat_history", [])
+        if day_history:
+            lines.append("\nDay discussion summary:")
+            for msg in day_history[-15:]:
+                sender = msg.get("sender_name", "Unknown") if isinstance(msg, dict) else getattr(msg, "sender_name", "Unknown")
+                content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+                lines.append(f"  {sender}: {content}")
+
+        if phase == "voting":
+            lines.append(
+                "\nYou must now vote to eliminate someone. "
+                "Choose based on who seemed suspicious during discussion."
+            )
+        elif phase == "night":
+            lines.append("\nIt is night. Perform your role action.")
+        elif phase == "day":
+            lines.append("\nIt is daytime. Discuss and try to find the Mafia members.")
+
+        return "\n".join(lines)
+
+    async def request_night_action(
+        self,
+        player: Any,
+        game_context: dict,
+        dispatcher: MCPToolDispatcher,
+    ) -> dict:
+        """
+        Запросить у ИИ ночное действие через MCP tool calling.
+
+        ``player`` — объект игрока (SQLAlchemy-модель, dataclass или dict)
+                     с атрибутами ``id``, ``role``, ``name``.
+        ``game_context`` — словарь с ключами ``alive_players``, ``dead_players``,
+                           ``phase``, ``night_number``.
+        """
+        system_prompt = self._build_system_prompt(player)
+        context_msg = self._build_game_context_message(game_context)
+
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": context_msg},
+        ]
+
+        player_id = player.get("id") if isinstance(player, dict) else getattr(player, "id", 0)
+
+        try:
+            response_message = await self.client.generate_response(
+                messages=messages,
+                tools=NIGHT_TOOLS,
+                tool_choice={"type": "function", "function": {"name": "perform_night_action"}},
+            )
+            results = await dispatcher.parse_and_dispatch(response_message, player_id=player_id)
+            return results[0] if results else {}
+        except Exception as e:
+            logger.error(f"request_night_action ошибка (player_id={player_id}): {e}")
+            return {"error": str(e)}
+
+    async def request_day_message(
+        self,
+        player: Any,
+        game_context: dict,
+        dispatcher: MCPToolDispatcher,
+    ) -> dict:
+        """
+        Запросить у ИИ сообщение для дневного чата.
+
+        ``game_context`` — словарь с ключами ``alive_players``, ``phase``,
+                           ``recent_messages``.
+        """
+        system_prompt = self._build_system_prompt(player)
+        context_msg = self._build_game_context_message(game_context)
+
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": context_msg},
+        ]
+
+        player_id = player.get("id") if isinstance(player, dict) else getattr(player, "id", 0)
+
+        try:
+            response_message = await self.client.generate_response(
+                messages=messages,
+                tools=DAY_TOOLS,
+                tool_choice={"type": "function", "function": {"name": "send_message"}},
+            )
+            results = await dispatcher.parse_and_dispatch(response_message, player_id=player_id)
+            return results[0] if results else {}
+        except Exception as e:
+            logger.error(f"request_day_message ошибка (player_id={player_id}): {e}")
+            return {"error": str(e)}
+
+    async def request_vote(
+        self,
+        player: Any,
+        game_context: dict,
+        dispatcher: MCPToolDispatcher,
+    ) -> dict:
+        """
+        Запросить у ИИ голос за исключение игрока.
+
+        ``game_context`` — словарь с ключами ``alive_players``,
+                           ``day_chat_history``, ``phase``.
+        """
+        system_prompt = self._build_system_prompt(player)
+        context_msg = self._build_game_context_message(game_context)
+
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": context_msg},
+        ]
+
+        player_id = player.get("id") if isinstance(player, dict) else getattr(player, "id", 0)
+
+        try:
+            response_message = await self.client.generate_response(
+                messages=messages,
+                tools=VOTE_TOOLS,
+                tool_choice={"type": "function", "function": {"name": "vote_for_player"}},
+            )
+            results = await dispatcher.parse_and_dispatch(response_message, player_id=player_id)
+            return results[0] if results else {}
+        except Exception as e:
+            logger.error(f"request_vote ошибка (player_id={player_id}): {e}")
+            return {"error": str(e)}
 
 
 # Глобальный экземпляр сервиса для удобства
