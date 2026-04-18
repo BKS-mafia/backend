@@ -53,7 +53,7 @@ class GameService:
         existing_players: List[PlayerModel],
     ) -> List[PlayerModel]:
         """
-        Дозаполнить комнату AI-игроками до room.max_players.
+        Дозаполнить комнату AI-игроками до room.total_players.
 
         Создаёт записи Player с is_ai=True и случайными уникальными никнеймами
         для каждого недостающего игрока. Обновляет счётчики комнаты.
@@ -69,11 +69,11 @@ class GameService:
         Raises:
             Exception: Если создание какого-либо AI-игрока завершилось ошибкой.
         """
-        needed: int = room.max_players - len(existing_players)
+        needed: int = room.total_players - len(existing_players)
         if needed <= 0:
             logger.debug(
                 f"Комната {room.id}: дозаполнение AI-игроками не требуется "
-                f"({len(existing_players)}/{room.max_players})"
+                f"({len(existing_players)}/{room.total_players})"
             )
             return []
 
@@ -137,7 +137,7 @@ class GameService:
             )
             logger.info(
                 f"Комната {room.id}: добавлено {len(created_ai_players)} AI-игроков. "
-                f"Итого игроков: {new_total}/{room.max_players}"
+                f"Итого игроков: {new_total}/{room.total_players}"
             )
 
         return created_ai_players
@@ -150,7 +150,7 @@ class GameService:
         """
         Начать игру в комнате: создать State Machine и запустить её.
 
-        Если в комнате игроков больше min_players, но меньше max_players,
+        Если в комнате игроков меньше total_players,
         недостающие слоты дозаполняются AI-игроками перед стартом.
         """
         # Проверка, что комната существует и готова
@@ -160,18 +160,12 @@ class GameService:
         if room.status not in (RoomStatus.LOBBY, RoomStatus.STARTING):
             raise ValueError(f"Комната не в статусе lobby/starting (статус: {room.status})")
 
-        # Проверка минимального количества игроков
+        # Проверка количества игроков
         players: List[PlayerModel] = await self.player_crud.get_by_room(
             db, room_id=room_id
         )
-        if len(players) < room.min_players:
-            raise ValueError(
-                f"Недостаточно игроков для начала игры: "
-                f"требуется {room.min_players}, сейчас {len(players)}"
-            )
-
-        # Дозаполняем комнату AI-игроками, если людей меньше максимума
-        if len(players) < room.max_players:
+        if len(players) < room.total_players:
+            # Дозаполняем комнату AI-игроками, если людей меньше максимума
             ai_players_added: List[PlayerModel] = await self._fill_with_ai_players(
                 db, room, players
             )

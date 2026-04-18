@@ -64,8 +64,9 @@ async def reconnect(
             "room_id": room.room_id,
             "status": room.status.value if hasattr(room.status, "value") else room.status,
             "current_players": room.current_players,
-            "max_players": room.max_players,
-            "min_players": room.min_players,
+            "total_players": room.total_players,
+            "ai_count": room.ai_count,
+            "people_count": room.people_count,
         },
         "game": {
             "id": game.id if game else None,

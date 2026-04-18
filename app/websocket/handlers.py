@@ -188,12 +188,12 @@ async def handle_start_game(
         )
         return
 
-    if room.current_players < room.min_players:
+    if room.current_players < room.total_players:
         await manager.send_personal_message(
             {
                 "error": (
                     f"Not enough players to start the game. "
-                    f"Minimum required: {room.min_players}, "
+                    f"Minimum required: {room.total_players}, "
                     f"currently in room: {room.current_players}"
                 )
             },

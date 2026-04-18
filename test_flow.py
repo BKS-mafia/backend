@@ -17,9 +17,15 @@ async def test_flow():
             "room_id": room_id_str,
             "host_token": host_token,
             "status": "waiting",
-            "max_players": 6,
-            "min_players": 3,
-            "ai_players": 2,
+            "totalPlayers": 8,
+            "aiCount": 3,
+            "peopleCount": 5,
+            "roles": {
+                "0": {"name": "Мирный", "count": 4, "canBeHuman": True, "canBeAI": True},
+                "1": {"name": "Мафия", "count": 2, "canBeHuman": True, "canBeAI": True},
+                "2": {"name": "Комиссар", "count": 1, "canBeHuman": True, "canBeAI": True},
+                "3": {"name": "Доктор", "count": 1, "canBeHuman": True, "canBeAI": True}
+            },
             "settings": {}
         })
         if response.status_code != 201:

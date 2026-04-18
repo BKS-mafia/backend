@@ -19,8 +19,10 @@ class Room(Base):
     room_id = Column(String, unique=True, index=True, nullable=False)
     host_token = Column(String, unique=True, nullable=False)
     status = Column(Enum(RoomStatus), default=RoomStatus.LOBBY)
-    max_players = Column(Integer, default=10)
-    min_players = Column(Integer, default=5)
+    total_players = Column(Integer, default=8)
+    ai_count = Column(Integer, default=3)
+    people_count = Column(Integer, default=5)
+    roles = Column(Text)  # JSON string with roles configuration
     current_players = Column(Integer, default=0)
     ai_players = Column(Integer, default=0)
     human_players = Column(Integer, default=0)

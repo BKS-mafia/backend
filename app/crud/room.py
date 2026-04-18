@@ -35,12 +35,19 @@ class RoomCRUD:
         if not host_token:
             host_token = str(uuid.uuid4())
 
+        roles_json = None
+        if obj_in.roles:
+            roles_dict = {k: v.model_dump(by_alias=True) for k, v in obj_in.roles.items()}
+            roles_json = json.dumps(roles_dict)
+
         room = RoomModel(
             room_id=room_id,
             host_token=host_token,
             status=status_enum,
-            max_players=obj_in.max_players,
-            min_players=obj_in.min_players,
+            total_players=obj_in.total_players,
+            ai_count=obj_in.ai_count,
+            people_count=obj_in.people_count,
+            roles=roles_json,
             current_players=obj_in.current_players,
             ai_players=obj_in.ai_players,
             human_players=obj_in.human_players,
@@ -119,7 +126,7 @@ class RoomCRUD:
         """
         Обновить комнату.
         """
-        update_data = obj_in.dict(exclude_unset=True)
+        update_data = obj_in.model_dump(exclude_unset=True)
         if not update_data:
             return db_obj
 
@@ -137,6 +144,14 @@ class RoomCRUD:
                 if update_data["settings"] is not None
                 else None
             )
+
+        # Сериализация roles в JSON
+        if "roles" in update_data:
+            if update_data["roles"] is not None:
+                roles_dict = {k: v.model_dump(by_alias=True) for k, v in update_data["roles"].items()}
+                update_data["roles"] = json.dumps(roles_dict)
+            else:
+                update_data["roles"] = None
 
         for field, value in update_data.items():
             setattr(db_obj, field, value)

@@ -41,14 +41,14 @@ class RoomService:
         """
         Создать новую комнату с валидацией.
         """
-        # Валидация максимального количества игроков
-        if room_create.max_players > 20:
-            raise ValueError("Максимальное количество игроков не может превышать 20")
-        if room_create.min_players < 3:
-            raise ValueError("Минимальное количество игроков не может быть меньше 3")
-        if room_create.max_players < room_create.min_players:
+        # Валидация количества игроков
+        if room_create.total_players > 20:
+            raise ValueError("Общее количество игроков не может превышать 20")
+        if room_create.total_players < 3:
+            raise ValueError("Общее количество игроков не может быть меньше 3")
+        if room_create.ai_count + room_create.people_count != room_create.total_players:
             raise ValueError(
-                "Максимальное количество игроков не может быть меньше минимального"
+                "Сумма AI и людей должна быть равна общему количеству игроков"
             )
 
         # Проверка уникальности room_id (если требуется) - можно добавить проверку в CRUD
@@ -91,22 +91,20 @@ class RoomService:
         if not room:
             raise ValueError(f"Комната с ID {room_id} не найдена")
 
-        # Валидация изменения максимального количества игроков
-        if room_update.max_players is not None:
-            if room_update.max_players > 20:
-                raise ValueError("Максимальное количество игроков не может превышать 20")
-            if room_update.max_players < room.min_players:
-                raise ValueError(
-                    "Максимальное количество игроков не может быть меньше текущего минимального"
-                )
+        # Валидация изменения количества игроков
+        if room_update.total_players is not None:
+            if room_update.total_players > 20:
+                raise ValueError("Общее количество игроков не может превышать 20")
+            if room_update.total_players < 3:
+                raise ValueError("Общее количество игроков не может быть меньше 3")
 
-        # Проверка, что current_players не превышает max_players
+        # Проверка, что current_players не превышает total_players
         if room_update.current_players is not None:
-            max_players = room_update.max_players or room.max_players
-            if room_update.current_players > max_players:
+            total_players = room_update.total_players or room.total_players
+            if room_update.current_players > total_players:
                 raise ValueError(
                     f"Текущее количество игроков ({room_update.current_players}) "
-                    f"превышает максимальное ({max_players})"
+                    f"превышает общее ({total_players})"
                 )
 
         updated_room = await self.room_crud.update(
@@ -165,7 +163,7 @@ class RoomService:
             raise ValueError("Нельзя присоединиться к игре, которая уже началась или завершена")
 
         # Проверка максимального количества игроков
-        if room.current_players >= room.max_players:
+        if room.current_players >= room.total_players:
             raise ValueError("Комната заполнена")
 
         # Проверка, что игрок с таким nickname уже не присутствует в комнате (опционально)
@@ -214,11 +212,11 @@ class RoomService:
         if not room:
             raise ValueError(f"Комната с ID {room_id} не найдена")
 
-        # Проверка минимального количества игроков
-        if room.current_players < room.min_players:
+        # Проверка количества игроков
+        if room.current_players < room.total_players:
             raise ValueError(
                 f"Недостаточно игроков для начала игры: "
-                f"требуется {room.min_players}, сейчас {room.current_players}"
+                f"требуется {room.total_players}, сейчас {room.current_players}"
             )
 
         # Проверка, что комната в статусе "waiting"
