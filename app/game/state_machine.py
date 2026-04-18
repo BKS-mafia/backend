@@ -176,6 +176,7 @@ class StateMachine:
         ]
         ctx = {
             "phase": self.current_phase.value if hasattr(self.current_phase, "value") else str(self.current_phase),
+            "day_number": self.day_number,
             "alive_players": alive,
             "dead_players": dead,
             "night_number": self.night_number,

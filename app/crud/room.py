@@ -51,6 +51,13 @@ class RoomCRUD:
             roles_dict = {k: v.model_dump(by_alias=True) for k, v in obj_in.roles.items()}
             roles_json = json.dumps(roles_dict)
 
+        # Инициализация чатов по умолчанию
+        default_chats = [
+            {"name": "cityGroup", "countOfUnread": 0, "events": []},
+            {"name": "mafiaGroup", "countOfUnread": 0, "events": []},
+            {"name": "roleChat", "countOfUnread": 0, "events": []},
+        ]
+
         room = RoomModel(
             room_id=room_id,
             short_id=short_id,
@@ -60,6 +67,7 @@ class RoomCRUD:
             ai_count=obj_in.ai_count,
             people_count=obj_in.people_count,
             roles=roles_json,
+            chats=json.dumps(default_chats),
             current_players=0,
             ai_players=0,
             human_players=0,
@@ -135,6 +143,21 @@ class RoomCRUD:
         )
         result = await db.execute(stmt)
         return result.scalars().all()
+
+    async def get_chats(self, db: AsyncSession, *, room_id: str) -> List[dict]:
+        """
+        Получить список чатов для комнаты по room_id.
+        """
+        room = await self.get_by_room_id(db, room_id=room_id)
+        if not room:
+            return None
+        
+        if room.chats:
+            try:
+                return json.loads(room.chats)
+            except (json.JSONDecodeError, ValueError):
+                return []
+        return []
 
     async def update(
         self,

@@ -127,6 +127,8 @@ async def handle_websocket_message(
 
     if event_type == "chat_message":
         await handle_chat_message(websocket, player, message, db)
+    elif event_type == "chat_message_extended":
+        await handle_chat_message_extended(websocket, player, message, db)
     elif event_type == "ghost_chat":
         if not player.is_alive:
             await handle_ghost_chat_message(websocket, player, message, db)
@@ -314,6 +316,184 @@ async def handle_chat_message(
         await db.commit()
 
     await manager.broadcast_to_room(player.room_id, chat_payload)
+
+
+async def handle_chat_message_extended(
+    websocket: WebSocket,
+    player: PlayerModel,
+    message: Dict[str, Any],
+    db: AsyncSession,
+) -> None:
+    """
+    Handle a 'chat_message_extended' event with support for 3 chat types:
+    - cityGroup: works during DAY phase for ALL players
+    - mafiaGroup: works during NIGHT phase ONLY for mafia role players
+    - roleChat: works during NIGHT phase ONLY for doctor or commissioner role players
+    
+    Message structure:
+    {
+        "type": "chat_message_extended",
+        "chatName": "cityGroup" | "mafiaGroup" | "roleChat",
+        "body": "сообщение",
+        "roomId": "room_id"
+    }
+    """
+    from app.models.room import Room
+    from app import crud as crud_module
+    
+    # Extract message data
+    chat_name = message.get("chatName", "").strip()
+    body = message.get("body", "").strip()
+    room_id_str = message.get("roomId", "")
+    
+    # Validate required fields
+    if not chat_name:
+        await manager.send_personal_message(
+            {"error": "chatName is required"}, websocket
+        )
+        return
+    
+    if not body:
+        await manager.send_personal_message(
+            {"error": "Message body cannot be empty"}, websocket
+        )
+        return
+    
+    # Validate chat name
+    valid_chats = ["cityGroup", "mafiaGroup", "roleChat"]
+    if chat_name not in valid_chats:
+        await manager.send_personal_message(
+            {"error": f"Invalid chat name. Must be one of: {valid_chats}"}, websocket
+        )
+        return
+    
+    # Get current game phase from state machine
+    machine = game_service.active_machines.get(player.room_id)
+    current_phase = machine.current_phase if machine else None
+    
+    # Check access permissions based on chat type and game phase
+    has_access = False
+    error_message = None
+    
+    if chat_name == "cityGroup":
+        # cityGroup works during DAY phase (or no game/LOBBY)
+        if current_phase in [None, GamePhase.LOBBY, GamePhase.DAY, GamePhase.VOTING, GamePhase.TURING_TEST]:
+            has_access = True
+        else:
+            error_message = "cityGroup chat is only available during day phase"
+    
+    elif chat_name == "mafiaGroup":
+        # mafiaGroup works during NIGHT phase ONLY for mafia players
+        if current_phase == GamePhase.NIGHT:
+            if player.role == PlayerRole.MAFIA:
+                has_access = True
+            else:
+                error_message = "mafiaGroup chat is only available for mafia players"
+        else:
+            error_message = "mafiaGroup chat is only available during night phase"
+    
+    elif chat_name == "roleChat":
+        # roleChat works during NIGHT phase ONLY for doctor or commissioner
+        if current_phase == GamePhase.NIGHT:
+            if player.role in [PlayerRole.DOCTOR, PlayerRole.COMMISSIONER]:
+                has_access = True
+            else:
+                error_message = "roleChat is only available for doctor or commissioner"
+        else:
+            error_message = "roleChat is only available during night phase"
+    
+    # If no access, send error and return
+    if not has_access:
+        await manager.send_personal_message(
+            {"error": error_message}, websocket
+        )
+        return
+    
+    # Get room to update chats
+    room = await crud.room.get(db, id=player.room_id)
+    if not room:
+        await manager.send_personal_message(
+            {"error": "Room not found"}, websocket
+        )
+        return
+    
+    # Parse existing chats
+    try:
+        chats_data = json.loads(room.chats) if room.chats else []
+    except json.JSONDecodeError:
+        chats_data = []
+    
+    # Find or create the chat
+    chat_found = False
+    for chat in chats_data:
+        if chat.get("name") == chat_name:
+            # Add message to chat events
+            if "events" not in chat:
+                chat["events"] = []
+            chat["events"].append({
+                "player_id": player.id,
+                "nickname": player.nickname,
+                "body": body,
+                "is_ai": player.is_ai,
+                "timestamp": None  # Could add timestamp here
+            })
+            chat_found = True
+            break
+    
+    if not chat_found:
+        # Create new chat entry if not exists
+        chats_data.append({
+            "name": chat_name,
+            "countOfUnread": 0,
+            "events": [{
+                "player_id": player.id,
+                "nickname": player.nickname,
+                "body": body,
+                "is_ai": player.is_ai,
+                "timestamp": None
+            }]
+        })
+    
+    # Update room chats in DB
+    room.chats = json.dumps(chats_data)
+    await db.commit()
+    
+    # Determine which players should receive this message
+    recipient_player_ids: List[int] = []
+    
+    if chat_name == "cityGroup":
+        # All alive players in the room
+        all_players = await crud.player.get_by_room(db, room_id=player.room_id)
+        recipient_player_ids = [p.id for p in all_players if p.is_alive]
+    
+    elif chat_name == "mafiaGroup":
+        # Only mafia players (alive)
+        all_players = await crud.player.get_by_room(db, room_id=player.room_id)
+        recipient_player_ids = [
+            p.id for p in all_players
+            if p.role == PlayerRole.MAFIA and p.is_alive
+        ]
+    
+    elif chat_name == "roleChat":
+        # Only doctor and commissioner (alive)
+        all_players = await crud.player.get_by_room(db, room_id=player.room_id)
+        recipient_player_ids = [
+            p.id for p in all_players
+            if p.role in [PlayerRole.DOCTOR, PlayerRole.COMMISSIONER] and p.is_alive
+        ]
+    
+    # Build message payload
+    chat_payload: Dict[str, Any] = {
+        "type": "chat_event_extended",
+        "chatName": chat_name,
+        "body": body,
+        "player_id": player.id,
+        "nickname": player.nickname,
+        "is_ai": player.is_ai,
+    }
+    
+    # Send to recipients
+    await manager.broadcast_to_players(recipient_player_ids, chat_payload)
 
 
 async def handle_ghost_chat_message(

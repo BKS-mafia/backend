@@ -8,6 +8,8 @@ from .room import (
     RoomUpdate,
     RoomInDBBase,
     Room,
+    ChatRoom,
+    ChatEvent,
 )
 from .player import (
     PlayerBase,

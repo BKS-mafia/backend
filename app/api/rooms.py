@@ -88,13 +88,14 @@ async def create_room(
 
 # ── GET /{room_id} — получить комнату ────────────────────────────────────────
 
-@router.get("/{room_id}", response_model=schemas.Room)
+@router.get("/{room_id}")
 async def get_room(
     room_id: str,
     db: AsyncSession = Depends(get_db),
-) -> schemas.Room:
+) -> Dict[str, Any]:
     """
     Получить комнату по её публичному room_id (UUID) или short_id.
+    Возвращает полную информацию о комнате, включая игроков и чаты.
     """
     # Пробуем найти по short_id, если это 5-символьный код
     if len(room_id) == 5 and room_id.isalnum():
@@ -107,7 +108,17 @@ async def get_room(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Room not found",
         )
-    return room
+    
+    # Получаем игроков комнаты
+    players = await crud.player.get_by_room(db, room_id=room.id)
+    
+    # Преобразуем комнату в словарь
+    room_data = schemas.Room.model_validate(room).model_dump(by_alias=True)
+    
+    # Добавляем игроков как Players
+    room_data["Players"] = [schemas.Player.model_validate(p).model_dump(by_alias=True) for p in players]
+    
+    return room_data
 
 
 # ── 2.2 PATCH /{room_id} — обновить настройки комнаты ───────────────────────
@@ -380,6 +391,38 @@ async def get_game_events(
         db, game_id=game.id, skip=skip, limit=limit
     )
     return events
+
+
+# ── GET /{room_id}/chats — получить историю чатов комнаты ───────────────────
+
+@router.get("/{room_id}/chats", response_model=List[schemas.ChatRoom])
+async def get_room_chats(
+    room_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> List[schemas.ChatRoom]:
+    """
+    Получить историю чатов для комнаты.
+    Принимает как room_id (UUID), так и short_id.
+    Возвращает список чатов с событиями.
+    """
+    # Пробуем найти по short_id, если это 5-символьный код
+    if len(room_id) == 5 and room_id.isalnum():
+        room = await room_service.get_room_by_short_id(db, short_id=room_id)
+    else:
+        room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    
+    if not room:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Room not found",
+        )
+
+    chats_data = await crud.room.get_chats(db, room_id=room.room_id)
+    if chats_data is None:
+        return []
+    
+    # Преобразуем dict в ChatRoom объекты
+    return [schemas.ChatRoom(**chat) for chat in chats_data]
 
 
 # ── 2.8 DELETE /{room_id}/players/{player_id} — кик игрока ──────────────────

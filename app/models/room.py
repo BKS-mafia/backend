@@ -24,6 +24,7 @@ class Room(Base):
     ai_count = Column(Integer, default=3)
     people_count = Column(Integer, default=5)
     roles = Column(Text)  # JSON string with roles configuration
+    chats = Column(Text, default="[]")  # JSON string with list of chats
     current_players = Column(Integer, default=0)
     ai_players = Column(Integer, default=0)
     human_players = Column(Integer, default=0)

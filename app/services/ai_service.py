@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import random
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
@@ -21,6 +23,23 @@ from app.ai.mcp_tools import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def load_prompts() -> Dict[str, Any]:
+    """
+    Загружает промпты из JSON файла.
+    """
+    prompts_path = os.path.join(os.path.dirname(__file__), "..", "prompts.json")
+    try:
+        with open(prompts_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.warning(f"Файл промптов не найден: {prompts_path}")
+        return {}
+
+
+# Загружаем промпты при импорте модуля
+PROMPTS = load_prompts()
 
 
 @dataclass
@@ -108,8 +127,22 @@ class AIService:
     ) -> List[Dict[str, str]]:
         """
         Создать промпт для AI на основе контекста и персонажа.
+        Использует шаблоны из prompts.json.
         """
-        system_message = f"""Ты игрок в мафию с ролью {character.role}. Твой характер: {character.personality}
+        # Используем шаблон из JSON или fallback
+        template = PROMPTS.get("create_prompt", "")
+        if template:
+            system_message = template.format(
+                character_role=character.role,
+                character_personality=character.personality,
+                character_speaking_style=character.speaking_style,
+                role=character.role,
+                personality=character.personality,
+                speaking_style=character.speaking_style,
+                context=context
+            )
+        else:
+            system_message = f"""Ты игрок в мафию с ролью {character.role}. Твой характер: {character.personality}
 Твой стиль речи: {character.speaking_style}
 
 Ты находишься в игровом чате. Отвечай так, как будто ты реальный игрок.
@@ -121,9 +154,12 @@ class AIService:
         if additional_instructions:
             system_message += f"\nДополнительные инструкции: {additional_instructions}"
 
+        # Используем user_prompt из JSON или fallback
+        user_prompt = PROMPTS.get("user_prompt", "Что ты скажешь?")
+
         messages = [
             {"role": "system", "content": system_message},
-            {"role": "user", "content": "Что ты скажешь?"},
+            {"role": "user", "content": user_prompt},
         ]
         return messages
 
@@ -174,6 +210,22 @@ class AIService:
         # Ролевое поведение
         role_behavior = self._get_role_behavior(role)
 
+        # Используем шаблон из JSON или fallback
+        template = PROMPTS.get("system_prompt", "")
+        if template:
+            return template.format(
+                name=name,
+                player_id=player_id,
+                player_index=player_index,
+                total_players=total_players,
+                alive_count=alive_count,
+                role=role,
+                role_behavior=role_behavior,
+                personality=personality,
+                unique_traits=unique_traits,
+                speaking_style=speaking_style
+            )
+        
         return (
             f"Ты — игрок в мафию по имени {name}.\n"
             f"Твой уникальный ID в игре: {player_id}\n"
@@ -194,9 +246,10 @@ class AIService:
         """
         Генерирует уникальные личные качества для бота на основе его ID.
         Это обеспечивает разнообразие ответов даже при одинаковой роли.
+        Использует unique_traits из prompts.json.
         """
-        # Используем ID для детерминированного выбора качеств
-        traits_pool = [
+        # Используем traits из JSON или fallback
+        traits_pool = PROMPTS.get("unique_traits", [
             "Склонен к паранойе и подозрительности",
             "Оптимистичный и доверчивый",
             "Аналитический ум, любит факты",
@@ -217,20 +270,23 @@ class AIService:
             "Внимательный к настроению группы",
             "Независимое мышление",
             "Следует за лидером",
-        ]
+        ])
         
         # Детерминированный выбор на основе ID
         idx = (player_id * 7 + len(name)) % len(traits_pool)
         return traits_pool[idx]
 
     def _get_role_behavior(self, role: str) -> str:
-        """Возвращает описание поведения для конкретной роли."""
-        behaviors = {
+        """Возвращает описание поведения для конкретной роли.
+        Использует role_behaviors из prompts.json.
+        """
+        # Используем behaviors из JSON или fallback
+        behaviors = PROMPTS.get("role_behaviors", {
             "mafia": "Ты мафия. Твоя цель — уничтожить мирных жителей. Ты должен скрывать свою роль и стараться направить подозрения на других.",
             "civilian": "Ты мирный житель. Твоя цель — найти и вывести мафию. Анализируй поведение игроков и вычисляй преступников.",
             "doctor": "Ты доктор. Ты можешь защитить одного игрока каждую ночь. Действуй осторожно, чтобы не раскрыть себя.",
             "commissioner": "Ты комиссар. Ты можешь узнать роль игрока ночью. Собирай информацию и используй её в нужный момент.",
-        }
+        })
         return behaviors.get(role, "Ты мирный житель.")
 
     async def generate_response(
@@ -370,50 +426,65 @@ class AIService:
         """Форматировать game_context в строку для ИИ."""
         lines: List[str] = []
         phase = context.get("phase", "unknown")
-        lines.append(f"Current game phase: {phase}")
-
-        if "night_number" in context:
-            lines.append(f"Night number: {context['night_number']}")
+        
+        # Добавляем информацию о дне и фазе
+        day_number = context.get("day_number", 1)
+        night_number = context.get("night_number", 0)
+        
+        if night_number > 0:
+            lines.append(f"День {day_number}, Ночь {night_number}")
+        else:
+            lines.append(f"День {day_number}")
+        
+        lines.append(f"Текущая фаза: {phase}")
 
         alive = context.get("alive_players", [])
+        alive_count = len(alive)
         if alive:
             alive_names = ", ".join(
                 [p.get("name", str(p.get("id", "?"))) if isinstance(p, dict) else getattr(p, "name", str(getattr(p, "id", "?"))) for p in alive]
             )
-            lines.append(f"Alive players: {alive_names}")
+            lines.append(f"Живые игроки ({alive_count}): {alive_names}")
 
         dead = context.get("dead_players", [])
+        dead_count = len(dead)
         if dead:
             dead_names = ", ".join(
                 [p.get("name", str(p.get("id", "?"))) if isinstance(p, dict) else getattr(p, "name", str(getattr(p, "id", "?"))) for p in dead]
             )
-            lines.append(f"Dead players: {dead_names}")
+            lines.append(f"Мёртвые игроки ({dead_count}): {dead_names}")
 
+        # Добавляем контекст общения - последние сообщения
         recent_messages = context.get("recent_messages", [])
         if recent_messages:
-            lines.append("\nRecent chat messages:")
-            for msg in recent_messages[-10:]:  # последние 10
+            lines.append("\nПоследние сообщения в чате:")
+            for msg in recent_messages[-8:]:  # последние 8
                 sender = msg.get("sender_name", "Unknown") if isinstance(msg, dict) else getattr(msg, "sender_name", "Unknown")
                 content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
                 lines.append(f"  {sender}: {content}")
 
+        # История дневного обсуждения
         day_history = context.get("day_chat_history", [])
         if day_history:
-            lines.append("\nDay discussion summary:")
-            for msg in day_history[-15:]:
+            lines.append("\nКраткое содержание обсуждения:")
+            for msg in day_history[-10:]:
                 sender = msg.get("sender_name", "Unknown") if isinstance(msg, dict) else getattr(msg, "sender_name", "Unknown")
                 content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
                 lines.append(f"  {sender}: {content}")
 
+        # Инструкции в зависимости от фазы
         if phase == "voting":
             lines.append(
-                "\nYou must now vote to eliminate someone. "
-                "Choose based on who seemed suspicious during discussion."
+                "\nСейчас голосование. Тебе нужно проголосовать за игрока, которого ты считаешь мафией.\n"
+                "Обоснуй свой выбор, если хочешь."
             )
         elif phase == "night":
-            lines.append("\nIt is night. Perform your role action.")
+            lines.append("\nНочь. Выполни действие своей роли (если оно есть).")
         elif phase == "day":
-            lines.append("\nIt is daytime. Discuss and try to find the Mafia members.")
+            lines.append(
+                "\nДень. Обсуждение в чате. Выскажи своё мнение о других игроках.\n"
+                "Постарайся говорить что-то уникальное, отличное от других."
+            )
 
         return "\n".join(lines)
 
@@ -431,15 +502,34 @@ class AIService:
         ``game_context`` — словарь с ключами ``alive_players``, ``dead_players``,
                            ``phase``, ``night_number``.
         """
-        system_prompt = self._build_system_prompt(player)
+        # Добавляем информацию об индексе игрока в контекст
+        player_id = player.get("id") if isinstance(player, dict) else getattr(player, "id", 0)
+        alive_players = game_context.get("alive_players", [])
+        
+        # Вычисляем порядковый номер бота среди живых игроков
+        player_index = 1
+        total_players = len(alive_players)
+        for i, p in enumerate(alive_players, 1):
+            p_id = p.get("id") if isinstance(p, dict) else getattr(p, "id", 0)
+            if p_id == player_id:
+                player_index = i
+                break
+        
+        # Обогащаем контекст для system prompt
+        enriched_context = {
+            **game_context,
+            "player_index": player_index,
+            "total_players": total_players,
+            "alive_count": total_players,
+        }
+        
+        system_prompt = self._build_system_prompt(player, enriched_context)
         context_msg = self._build_game_context_message(game_context)
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": context_msg},
         ]
-
-        player_id = player.get("id") if isinstance(player, dict) else getattr(player, "id", 0)
 
         try:
             response_message = await self.client.generate_response(
@@ -465,7 +555,28 @@ class AIService:
         ``game_context`` — словарь с ключами ``alive_players``, ``phase``,
                            ``recent_messages``.
         """
-        system_prompt = self._build_system_prompt(player)
+        # Добавляем информацию об индексе игрока в контекст
+        player_id = player.get("id") if isinstance(player, dict) else getattr(player, "id", 0)
+        alive_players = game_context.get("alive_players", [])
+        
+        # Вычисляем порядковый номер бота среди живых игроков
+        player_index = 1
+        total_players = len(alive_players)
+        for i, p in enumerate(alive_players, 1):
+            p_id = p.get("id") if isinstance(p, dict) else getattr(p, "id", 0)
+            if p_id == player_id:
+                player_index = i
+                break
+        
+        # Обогащаем контекст для system prompt
+        enriched_context = {
+            **game_context,
+            "player_index": player_index,
+            "total_players": total_players,
+            "alive_count": total_players,
+        }
+        
+        system_prompt = self._build_system_prompt(player, enriched_context)
         context_msg = self._build_game_context_message(game_context)
 
         messages: List[Dict[str, Any]] = [
@@ -546,15 +657,34 @@ class AIService:
         ``game_context`` — словарь с ключами ``alive_players``,
                            ``day_chat_history``, ``phase``.
         """
-        system_prompt = self._build_system_prompt(player)
+        # Добавляем информацию об индексе игрока в контекст
+        player_id = player.get("id") if isinstance(player, dict) else getattr(player, "id", 0)
+        alive_players = game_context.get("alive_players", [])
+        
+        # Вычисляем порядковый номер бота среди живых игроков
+        player_index = 1
+        total_players = len(alive_players)
+        for i, p in enumerate(alive_players, 1):
+            p_id = p.get("id") if isinstance(p, dict) else getattr(p, "id", 0)
+            if p_id == player_id:
+                player_index = i
+                break
+        
+        # Обогащаем контекст для system prompt
+        enriched_context = {
+            **game_context,
+            "player_index": player_index,
+            "total_players": total_players,
+            "alive_count": total_players,
+        }
+        
+        system_prompt = self._build_system_prompt(player, enriched_context)
         context_msg = self._build_game_context_message(game_context)
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": context_msg},
         ]
-
-        player_id = player.get("id") if isinstance(player, dict) else getattr(player, "id", 0)
 
         try:
             response_message = await self.client.generate_response(
