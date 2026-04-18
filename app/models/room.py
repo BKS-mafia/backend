@@ -17,6 +17,7 @@ class Room(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     room_id = Column(String, unique=True, index=True, nullable=False)
+    short_id = Column(String, unique=True, index=True, nullable=True, default=None)
     host_token = Column(String, unique=True, nullable=False)
     status = Column(Enum(RoomStatus), default=RoomStatus.LOBBY)
     total_players = Column(Integer, default=8)

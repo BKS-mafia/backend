@@ -8,6 +8,7 @@ from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app import schemas
 from app.models.room import Room as RoomModel, RoomStatus
+from app.utils.short_id import generate_unique_short_id
 
 
 class RoomCRUD:
@@ -45,6 +46,9 @@ class RoomCRUD:
         if existing_host:
             raise ValueError(f"Room with host_token '{host_token}' already exists")
 
+        # Генерируем уникальный short_id
+        short_id = await generate_unique_short_id(db)
+
         roles_json = None
         if obj_in.roles:
             roles_dict = {k: v.model_dump(by_alias=True) for k, v in obj_in.roles.items()}
@@ -52,6 +56,7 @@ class RoomCRUD:
 
         room = RoomModel(
             room_id=room_id,
+            short_id=short_id,
             host_token=host_token,
             status=status_enum,
             total_players=obj_in.total_players,
@@ -89,6 +94,14 @@ class RoomCRUD:
         Получить комнату по host_token.
         """
         stmt = select(RoomModel).where(RoomModel.host_token == host_token)
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_short_id(self, db: AsyncSession, *, short_id: str) -> Optional[RoomModel]:
+        """
+        Получить комнату по short_id.
+        """
+        stmt = select(RoomModel).where(RoomModel.short_id == short_id)
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
 

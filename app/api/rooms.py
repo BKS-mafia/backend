@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
-from typing import List, Any, Dict
+from typing import List, Any, Dict, Optional
 
 from app import crud, schemas
 from app.db.session import get_db
@@ -9,6 +10,45 @@ from app.services.room_service import room_service
 from app.services.game_service import game_service
 
 router = APIRouter()
+
+
+async def resolve_room_id(room_id_or_short: str, db: AsyncSession) -> Optional[str]:
+    """
+    Преобразует room_id или short_id в room_id (UUID).
+    Если передан UUID - возвращает его напрямую.
+    Если передан short_id - ищет комнату и возвращает её room_id.
+    """
+    # Проверяем, является ли это short_id (5 символов, буквы и цифры)
+    if len(room_id_or_short) == 5 and room_id_or_short.isalnum():
+        room = await room_service.get_room_by_short_id(db, short_id=room_id_or_short)
+        if room:
+            return room.room_id
+    
+    # Иначе считаем, что это room_id (UUID)
+    room = await room_service.get_room_by_public_id(db, public_room_id=room_id_or_short)
+    if room:
+        return room.room_id
+    
+    return None
+
+
+# ── GET /s/{short_id} — редирект на комнату по short_id ────────────────────────
+
+@router.get("/s/{short_id}", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+async def redirect_short_id(
+    short_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Перенаправить на страницу комнаты по short_id.
+    """
+    room = await room_service.get_room_by_short_id(db, short_id=short_id)
+    if not room:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Room not found",
+        )
+    return RedirectResponse(url=f"/rooms/{room.room_id}")
 
 
 # ── 2.1 GET / — список активных лобби ────────────────────────────────────────
@@ -54,9 +94,14 @@ async def get_room(
     db: AsyncSession = Depends(get_db),
 ) -> schemas.Room:
     """
-    Получить комнату по её публичному room_id (UUID).
+    Получить комнату по её публичному room_id (UUID) или short_id.
     """
-    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    # Пробуем найти по short_id, если это 5-символьный код
+    if len(room_id) == 5 and room_id.isalnum():
+        room = await room_service.get_room_by_short_id(db, short_id=room_id)
+    else:
+        room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    
     if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -76,8 +121,14 @@ async def update_room(
     """
     Обновить настройки комнаты.
     Только хост может менять настройки (проверка host_token через заголовок при необходимости).
+    Принимает как room_id (UUID), так и short_id.
     """
-    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    # Пробуем найти по short_id, если это 5-символьный код
+    if len(room_id) == 5 and room_id.isalnum():
+        room = await room_service.get_room_by_short_id(db, short_id=room_id)
+    else:
+        room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    
     if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -99,8 +150,14 @@ async def delete_room(
 ) -> None:
     """
     Удалить комнату и уведомить подключённых игроков.
+    Принимает как room_id (UUID), так и short_id.
     """
-    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    # Пробуем найти по short_id, если это 5-символьный код
+    if len(room_id) == 5 and room_id.isalnum():
+        room = await room_service.get_room_by_short_id(db, short_id=room_id)
+    else:
+        room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    
     if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -119,8 +176,14 @@ async def join_room(
 ) -> schemas.Player:
     """
     Присоединиться к комнате как игрок.
+    Принимает как room_id (UUID), так и short_id.
     """
-    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    # Пробуем найти по short_id, если это 5-символьный код
+    if len(room_id) == 5 and room_id.isalnum():
+        room = await room_service.get_room_by_short_id(db, short_id=room_id)
+    else:
+        room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    
     if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -148,8 +211,14 @@ async def get_room_players(
 ) -> List[schemas.Player]:
     """
     Получить всех игроков в комнате.
+    Принимает как room_id (UUID), так и short_id.
     """
-    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    # Пробуем найти по short_id, если это 5-символьный код
+    if len(room_id) == 5 and room_id.isalnum():
+        room = await room_service.get_room_by_short_id(db, short_id=room_id)
+    else:
+        room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    
     if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -168,8 +237,14 @@ async def get_room_game(
 ) -> schemas.Game:
     """
     Получить текущую игровую сессию для комнаты.
+    Принимает как room_id (UUID), так и short_id.
     """
-    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    # Пробуем найти по short_id, если это 5-символьный код
+    if len(room_id) == 5 and room_id.isalnum():
+        room = await room_service.get_room_by_short_id(db, short_id=room_id)
+    else:
+        room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    
     if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -193,8 +268,14 @@ async def get_game_state(
 ) -> Dict[str, Any]:
     """
     Получить текущую фазу игры, номер дня, список живых игроков.
+    Принимает как room_id (UUID), так и short_id.
     """
-    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    # Пробуем найти по short_id, если это 5-символьный код
+    if len(room_id) == 5 and room_id.isalnum():
+        room = await room_service.get_room_by_short_id(db, short_id=room_id)
+    else:
+        room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    
     if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -237,8 +318,14 @@ async def start_game(
     """
     HTTP-альтернатива WebSocket start_game событию.
     Запускает игру в комнате.
+    Принимает как room_id (UUID), так и short_id.
     """
-    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    # Пробуем найти по short_id, если это 5-символьный код
+    if len(room_id) == 5 and room_id.isalnum():
+        room = await room_service.get_room_by_short_id(db, short_id=room_id)
+    else:
+        room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    
     if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -268,8 +355,14 @@ async def get_game_events(
 ) -> List[schemas.GameEvent]:
     """
     Получить историю событий текущей игры в комнате.
+    Принимает как room_id (UUID), так и short_id.
     """
-    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    # Пробуем найти по short_id, если это 5-символьный код
+    if len(room_id) == 5 and room_id.isalnum():
+        room = await room_service.get_room_by_short_id(db, short_id=room_id)
+    else:
+        room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    
     if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -299,8 +392,14 @@ async def kick_player(
 ) -> None:
     """
     Удалить игрока из комнаты (кик через HTTP).
+    Принимает как room_id (UUID), так и short_id.
     """
-    room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    # Пробуем найти по short_id, если это 5-символьный код
+    if len(room_id) == 5 and room_id.isalnum():
+        room = await room_service.get_room_by_short_id(db, short_id=room_id)
+    else:
+        room = await room_service.get_room_by_public_id(db, public_room_id=room_id)
+    
     if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

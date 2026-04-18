@@ -14,6 +14,7 @@ from app.crud.player import PlayerCRUD
 from app.websocket.manager import ConnectionManager
 from app.models.room import Room as RoomModel
 from app.models.player import Player as PlayerModel
+from app.utils.short_id import generate_unique_short_id
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,16 @@ class RoomService:
         Получить комнату по публичному room_id (UUID).
         """
         return await self.room_crud.get_by_room_id(db, room_id=public_room_id)
+
+    async def get_room_by_short_id(
+        self,
+        db: AsyncSession,
+        short_id: str,
+    ) -> Optional[RoomModel]:
+        """
+        Получить комнату по short_id.
+        """
+        return await self.room_crud.get_by_short_id(db, short_id=short_id)
 
     async def update_room(
         self,

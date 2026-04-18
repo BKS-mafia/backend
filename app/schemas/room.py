@@ -16,6 +16,7 @@ class RoleConfig(BaseModel):
 
 class RoomBase(BaseModel):
     room_id: str
+    short_id: Optional[str] = None
     host_token: str
     status: str
     total_players: int = Field(alias="totalPlayers", default=8)
