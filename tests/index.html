@@ -4,137 +4,251 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Mafia - Dev API Tester</title>
+    <title>AI Mafia - Тестовый интерфейс</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-    <div class="container">
-        <header>
-            <h1>AI Mafia - Dev API Tester</h1>
-            <div class="server-selector" style="margin: 10px 0;">
-                <label for="select-server">Сервер:</label>
-                <select id="select-server" style="padding: 5px; border-radius: 4px;">
-                    <option value="http://localhost:8000">http://localhost:8000 (Local)</option>
-                    <option value="http://91.201.252.14:8000">http://91.201.252.14:8000 (Remote)</option>
-                </select>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="app-title">
+                <h1>🎭 AI Mafia</h1>
+                <div class="server-selector">
+                    <select id="select-server">
+                        <option value="http://localhost:8000">localhost:8000</option>
+                        <option value="http://91.201.252.14:8000">Remote Server</option>
+                    </select>
+                </div>
             </div>
             <div class="connection-status">
                 <span id="ws-status-indicator" class="status-indicator disconnected"></span>
-                <span id="ws-status-text">WS Disconnected</span>
+                <span id="ws-status-text">Отключено</span>
             </div>
         </header>
 
-        <div class="main-content">
-            <!-- Левая колонка: Управление -->
-            <div class="controls-panel">
+        <!-- Левая панель - Управление -->
+        <div class="control-panel">
+            <!-- Создание комнаты -->
+            <section class="card">
+                <div class="card-header">
+                    <div class="card-icon">🏠</div>
+                    <h2>Создание комнаты</h2>
+                </div>
+                <div class="form-group">
+                    <label>Количество игроков</label>
+                    <input type="number" id="input-total-players" value="8" min="4" max="12">
+                </div>
+                <div class="form-group">
+                    <label>Количество AI</label>
+                    <input type="number" id="input-ai-count" value="3" min="0" max="12">
+                </div>
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="checkbox-all-ai">
+                    <label for="checkbox-all-ai">Все игроки AI</label>
+                </div>
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="checkbox-show-ai-messages" checked>
+                    <label for="checkbox-show-ai-messages">Показывать сообщения AI</label>
+                </div>
+                <div class="btn-group">
+                    <button id="btn-create-room" class="primary">Создать комнату</button>
+                    <button id="btn-create-all-ai">Все AI</button>
+                </div>
+                
+                <div id="room-info" class="room-info">
+                    <div class="room-info-item">
+                        <span class="room-info-label">Room ID:</span>
+                        <span class="room-info-value" id="display-room-id">-</span>
+                    </div>
+                    <div class="room-info-item">
+                        <span class="room-info-label">Short ID:</span>
+                        <span class="room-info-value" id="display-short-id">-</span>
+                    </div>
+                    <div class="room-info-item">
+                        <span class="room-info-label">Host Token:</span>
+                        <span class="room-info-value" id="display-host-token">-</span>
+                    </div>
+                </div>
+            </section>
 
-                <!-- Секция: Комнаты -->
-                <section class="card">
-                    <h2>1. Управление комнатами</h2>
-                    <div class="form-group">
-                        <button id="btn-get-rooms">Получить список комнат</button>
-                    </div>
-                    
-                    <!-- Настройки комнаты -->
-                    <div class="form-group">
-                        <label for="input-total-players">Всего игроков:</label>
-                        <input type="number" id="input-total-players" value="8" min="4" max="12" style="width: 60px;">
-                    </div>
-                    <div class="form-group">
-                        <label for="input-ai-count">AI игроков:</label>
-                        <input type="number" id="input-ai-count" value="3" min="0" max="12" style="width: 60px;">
-                    </div>
-                    <div class="form-group">
-                        <label>
-                            <input type="checkbox" id="checkbox-all-ai"> Все игроки ИИ
-                        </label>
-                    </div>
-                    <div class="form-group">
-                        <label>
-                            <input type="checkbox" id="checkbox-show-ai-messages" checked> Показывать сообщения нейросетей
-                        </label>
-                    </div>
-                    <div class="form-group">
-                        <button id="btn-create-room">Создать комнату</button>
-                        <button id="btn-create-all-ai-room" style="margin-left: 5px;">Все ИИ</button>
-                    </div>
-                    <div class="form-group">
-                        <label for="input-room-id">Room ID:</label>
-                        <input type="text" id="input-room-id" placeholder="UUID комнаты">
-                        <button id="btn-get-room">Инфо о комнате</button>
-                    </div>
-                </section>
+            <!-- Присоединение к комнате -->
+            <section class="card">
+                <div class="card-header">
+                    <div class="card-icon">🚪</div>
+                    <h2>Присоединение</h2>
+                </div>
+                <div class="form-group">
+                    <label>Room ID или Short ID</label>
+                    <input type="text" id="input-room-id" placeholder="Введите ID комнаты">
+                </div>
+                <div class="form-group">
+                    <label>Ваше имя</label>
+                    <input type="text" id="input-nickname" value="Player1">
+                </div>
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="checkbox-is-ai">
+                    <label for="checkbox-is-ai">Я AI</label>
+                </div>
+                <div class="btn-group">
+                    <button id="btn-join-room" class="success">Присоединиться</button>
+                </div>
+                <div class="form-group" style="margin-top: 10px;">
+                    <label>Session Token</label>
+                    <input type="text" id="input-session-token" readonly placeholder="Токен появится после входа">
+                </div>
+            </section>
 
-                <!-- Секция: Игроки -->
-                <section class="card">
-                    <h2>2. Управление игроками</h2>
-                    <div class="form-group">
-                        <label for="input-nickname">Никнейм:</label>
-                        <input type="text" id="input-nickname" value="DevPlayer">
-                    </div>
-                    <div class="form-group">
-                        <button id="btn-join-room">Присоединиться к комнате</button>
-                    </div>
-                    <div class="form-group">
-                        <button id="btn-get-players">Список игроков в комнате</button>
-                    </div>
-                    <div class="form-group">
-                        <label>Текущий Session Token:</label>
-                        <input type="text" id="input-session-token" readonly placeholder="Токен появится после входа">
-                    </div>
-                </section>
-
-                <!-- Секция: WebSocket -->
-                <section class="card">
-                    <h2>3. WebSocket & Игра</h2>
-                    <div class="form-group">
-                        <button id="btn-ws-connect">Подключиться к WS</button>
-                        <button id="btn-ws-disconnect" disabled>Отключиться</button>
-                    </div>
-                    <div class="form-group">
-                        <button id="btn-ws-ready" disabled>Отправить Ready</button>
-                        <button id="btn-ws-start" disabled>Start Game (Host)</button>
-                    </div>
-
-                    <div class="divider"></div>
-
-                    <div class="form-group">
-                        <label for="input-chat-msg">Чат:</label>
-                        <input type="text" id="input-chat-msg" placeholder="Сообщение...">
-                        <button id="btn-ws-chat" disabled>Отправить</button>
-                    </div>
-
-                    <div class="divider"></div>
-
-                    <div class="form-group">
-                        <label for="input-target-id">Target Player ID:</label>
-                        <input type="number" id="input-target-id" placeholder="ID игрока">
-                    </div>
-                    <div class="form-group">
-                        <button id="btn-ws-vote" disabled>Голосовать (День)</button>
-                    </div>
+            <!-- Управление игрой -->
+            <section class="card">
+                <div class="card-header">
+                    <div class="card-icon">🎮</div>
+                    <h2>Управление игрой</h2>
+                </div>
+                <div class="btn-group">
+                    <button id="btn-ws-connect">Подключиться к WS</button>
+                    <button id="btn-ws-disconnect" disabled>Отключиться</button>
+                </div>
+                <div class="btn-group" style="margin-top: 10px;">
+                    <button id="btn-ws-ready" class="success" disabled>Готов</button>
+                    <button id="btn-ws-start" class="primary" disabled>Начать игру</button>
+                </div>
+                
+                <!-- Ночные действия -->
+                <div id="night-actions" class="action-section" style="margin-top: 15px; display: none;">
+                    <div class="action-title">🌙 Ночные действия</div>
                     <div class="form-group">
                         <select id="select-night-action">
-                            <option value="kill">Kill (Mafia)</option>
-                            <option value="heal">Heal (Doctor)</option>
-                            <option value="check">Check (Commissioner)</option>
+                            <option value="kill">Убить (Мафия)</option>
+                            <option value="heal">Лечить (Доктор)</option>
+                            <option value="check">Проверить (Комиссар)</option>
                         </select>
-                        <button id="btn-ws-night-action" disabled>Ночное действие</button>
                     </div>
-                </section>
+                    <div class="form-group">
+                        <label>Цель:</label>
+                        <select id="select-night-target">
+                            <option value="">Выберите игрока</option>
+                        </select>
+                    </div>
+                    <button id="btn-ws-night-action" class="primary">Выполнить действие</button>
+                </div>
+
+                <!-- Голосование -->
+                <div id="voting-actions" class="action-section" style="margin-top: 15px; display: none;">
+                    <div class="action-title">🗳️ Дневное голосование</div>
+                    <div class="form-group">
+                        <label>Голосовать за:</label>
+                        <select id="select-vote-target">
+                            <option value="">Выберите игрока</option>
+                        </select>
+                    </div>
+                    <button id="btn-ws-vote" class="primary">Голосовать</button>
+                </div>
+            </section>
+        </div>
+
+        <!-- Центральная панель - Чат -->
+        <div class="game-panel">
+            <!-- Информация о игре -->
+            <div class="game-info-bar">
+                <div class="game-info-item">
+                    <span class="game-info-label">Фаза:</span>
+                    <span class="game-info-value phase-badge" id="display-phase">LOBBY</span>
+                </div>
+                <div class="game-info-item">
+                    <span class="game-info-label">День:</span>
+                    <span class="game-info-value day-badge" id="display-day">-</span>
+                </div>
+                <div class="game-info-item">
+                    <span class="game-info-label">Роль:</span>
+                    <span class="game-info-value role-badge" id="display-role">-</span>
+                </div>
+                <div class="game-info-item">
+                    <span class="game-info-label">Статус:</span>
+                    <span class="game-info-value status-badge" id="display-status">В игре</span>
+                </div>
             </div>
 
-            <!-- Правая колонка: Логи -->
-            <div class="logs-panel">
-                <section class="card h-100">
-                    <div class="logs-header">
-                        <h2>Логи (HTTP & WS)</h2>
-                        <button id="btn-clear-logs" class="btn-small">Очистить</button>
-                    </div>
-                    <div id="logs-container" class="logs-container"></div>
-                </section>
+            <!-- Вкладки чатов -->
+            <div class="chat-tabs">
+                <button class="chat-tab active" data-chat="cityGroup" id="tab-cityGroup">
+                    <span class="tab-name">🏙️ Город</span>
+                    <span class="tab-status">Активен</span>
+                </button>
+                <button class="chat-tab disabled" data-chat="mafiaGroup" id="tab-mafiaGroup">
+                    <span class="tab-name">🔪 Мафия</span>
+                    <span class="tab-status inactive">Недоступен</span>
+                </button>
+                <button class="chat-tab disabled" data-chat="roleChat" id="tab-roleChat">
+                    <span class="tab-name">👨‍⚕️ Роли</span>
+                    <span class="tab-status inactive">Недоступен</span>
+                </button>
             </div>
+
+            <!-- Контейнер чата -->
+            <div class="chat-container">
+                <div class="chat-messages" id="chat-messages">
+                    <div class="chat-message other">
+                        <div class="message-header">
+                            <span class="message-sender">Система</span>
+                            <span class="message-time">--:--</span>
+                        </div>
+                        <div class="message-content">Добро пожаловать в AI Mafia! Создайте или присоединитесь к комнате, чтобы начать игру.</div>
+                    </div>
+                </div>
+                <div class="chat-input-area">
+                    <input type="text" id="input-chat-msg" placeholder="Введите сообщение...">
+                    <button id="btn-ws-chat" class="primary">Отправить</button>
+                </div>
+            </div>
+
+            <!-- Turing Test (показывается когда активно) -->
+            <div id="turing-test-section" class="turing-test-container" style="display: none;">
+                <div class="action-title">🤖 Turing Test - Определите AI игроков</div>
+                <div id="turing-players-list"></div>
+                <button id="btn-submit-turing" class="primary" style="margin-top: 15px;">Отправить результаты</button>
+            </div>
+
+            <!-- Результаты голосования -->
+            <div id="voting-results" class="voting-results" style="display: none;">
+                <div class="action-title">📊 Результаты голосования</div>
+                <div id="vote-bars"></div>
+            </div>
+
+            <!-- Победитель -->
+            <div id="winner-section" style="display: none;">
+                <div class="winner-display">
+                    <div class="winner-title">Игра окончена!</div>
+                    <div class="winner-team" id="winner-team">Победила мафия</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Правая панель -->
+        <div class="right-panel">
+            <!-- Список игроков -->
+            <section class="card">
+                <div class="card-header">
+                    <div class="card-icon">👥</div>
+                    <h2>Игроки</h2>
+                    <button id="btn-refresh-players" class="btn-small" style="margin-left: auto;">🔄</button>
+                </div>
+                <div class="players-list" id="players-list">
+                    <div style="text-align: center; color: #6b7280; padding: 20px;">
+                        Нет игроков в комнате
+                    </div>
+                </div>
+            </section>
+
+            <!-- Логи -->
+            <section class="card" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+                <div class="card-header">
+                    <div class="card-icon">📋</div>
+                    <h2>Логи</h2>
+                    <button id="btn-clear-logs" class="btn-small" style="margin-left: auto;">Очистить</button>
+                </div>
+                <div class="logs-container" id="logs-container"></div>
+            </section>
         </div>
     </div>
 

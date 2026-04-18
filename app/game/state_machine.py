@@ -224,6 +224,7 @@ class StateMachine:
         msg = {
             "sender_id": player_id,
             "sender_name": player.nickname or f"Player{player_id}",
+            "nickname": player.nickname or f"Player{player_id}",
             "content": content,
             "is_ai": True,
         }
@@ -343,6 +344,14 @@ class StateMachine:
             logger.error(f"Error in state machine for room {self.room_id}: {e}", exc_info=True)
         finally:
             self.is_running = False
+            # Закрываем сессию БД при завершении работы StateMachine
+            if self.db:
+                try:
+                    if self.db.in_transaction():
+                        await self.db.rollback()
+                    await self.db.close()
+                except Exception as e:
+                    logger.warning(f"Error closing DB session for room {self.room_id}: {e}")
 
     # ------------------------------------------------------------------
     # Фазы игры

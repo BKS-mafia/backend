@@ -43,11 +43,23 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
+            # Проверяем, есть ли активная транзакция перед закрытием
+            if session.in_transaction():
+                await session.commit()
         except Exception:
             await session.rollback()
             raise
         finally:
-            await session.close()
+            # Проверяем состояние перед закрытием
+            try:
+                # Если есть активная транзакция, откатываем её
+                if session.in_transaction():
+                    await session.rollback()
+                await session.close()
+            except Exception as e:
+                # Логируем ошибку закрытия, но не поднимаем исключение
+                import logging
+                logging.getLogger(__name__).warning(f"Error closing session: {e}")
 
 
 async def init_db() -> None:

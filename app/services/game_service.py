@@ -5,6 +5,7 @@
 Обработка таймеров и автоматических переходов.
 """
 import asyncio
+import json
 import logging
 import random
 import uuid
@@ -45,6 +46,34 @@ class GameService:
         self.tasks: Dict[int, asyncio.Task] = {}  # room_id -> задача таймера
         self.ready_players: Dict[int, set] = {}  # room_id -> set of ready player_ids
         self._phase_timers: Dict[int, asyncio.Task] = {}  # room_id -> asyncio.Task (таймер фазы)
+        
+        # Загружаем список имён для AI игроков
+        self._ai_names: List[str] = self._load_ai_names()
+    
+    def _load_ai_names(self) -> List[str]:
+        """Загрузить список человеческих имён для AI игроков из JSON файла."""
+        try:
+            with open("app/ai/names.json", "r", encoding="utf-8") as f:
+                names = json.load(f)
+                logger.info(f"Загружено {len(names)} имён для AI игроков")
+                return names
+        except FileNotFoundError:
+            logger.warning("Файл app/ai/names.json не найден, используем резервные имена")
+            return []
+        except json.JSONDecodeError as e:
+            logger.error(f"Ошибка чтения app/ai/names.json: {e}")
+            return []
+    
+    def _get_random_ai_name(self, occupied_nicknames: set[str]) -> str:
+        """Получить случайное имя для AI игрока, которое ещё не занято."""
+        # Если список имён пустой или все имена заняты, используем резервный вариант
+        available_names = [n for n in self._ai_names if n not in occupied_nicknames]
+        
+        if available_names:
+            return random.choice(available_names)
+        
+        # Резервный вариант если все имена заняты
+        return f"Player_{random.randint(10000, 99999)}"
 
     async def _fill_with_ai_players(
         self,
@@ -84,18 +113,9 @@ class GameService:
 
         for _ in range(needed):
             # Генерируем никнейм, уникальный среди уже занятых в этой сессии
-            attempt: int = 0
-            while True:
-                nickname: str = f"AI_Bot_{random.randint(1000, 9999)}"
-                if nickname not in occupied_nicknames:
-                    occupied_nicknames.add(nickname)
-                    break
-                attempt += 1
-                if attempt > 1000:
-                    # Страховочный выход во избежание бесконечного цикла
-                    nickname = f"AI_Bot_{uuid.uuid4().hex[:6]}"
-                    occupied_nicknames.add(nickname)
-                    break
+            # Используем человеческие имена из names.json
+            nickname: str = self._get_random_ai_name(occupied_nicknames)
+            occupied_nicknames.add(nickname)
 
             player_create = schemas.PlayerCreate(
                 player_id=str(uuid.uuid4()),
@@ -197,22 +217,26 @@ class GameService:
         # Создание State Machine с передачей ws_manager для рассылки событий
         from app.services.ai_service import ai_service
         from app.ai.mcp_tools import MCPToolDispatcher
+        from app.db.session import AsyncSessionLocal
         
-        mcp_dispatcher = MCPToolDispatcher()
-        machine = StateMachine(
-            room_id=room_id,
-            db=db,
-            ws_manager=self.ws_manager,
-            game_id=game.id,  # Передаём game_id для автоматического перехода из LOBBY
-            ai_service=ai_service,
-            mcp_dispatcher=mcp_dispatcher
-        )
-        self.active_machines[room_id] = machine
-        # Связываем machine с сервисом для запуска таймеров при смене фаз
-        machine.game_service = self
+        # Создаём НОВУЮ сессию для StateMachine, чтобы она не зависела от
+        # сессии HTTP запроса, которая будет закрыта после завершения запроса
+        async with AsyncSessionLocal() as machine_db:
+            mcp_dispatcher = MCPToolDispatcher()
+            machine = StateMachine(
+                room_id=room_id,
+                db=machine_db,
+                ws_manager=self.ws_manager,
+                game_id=game.id,  # Передаём game_id для автоматического перехода из LOBBY
+                ai_service=ai_service,
+                mcp_dispatcher=mcp_dispatcher
+            )
+            self.active_machines[room_id] = machine
+            # Связываем machine с сервисом для запуска таймеров при смене фаз
+            machine.game_service = self
 
-        # Запуск State Machine в фоне
-        asyncio.create_task(machine.start())
+            # Запуск State Machine в фоне с собственной сессией
+            asyncio.create_task(machine.start())
         logger.info(f"State Machine запущена для комнаты {room_id}")
 
         # Уведомление всех игроков через WebSocket

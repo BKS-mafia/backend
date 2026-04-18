@@ -1,14 +1,26 @@
+/* AI Mafia - Тестовый интерфейс Стили */
+
 :root {
-    --bg-color: #1e1e2e;
-    --panel-bg: #252538;
-    --text-color: #cdd6f4;
-    --accent-color: #89b4fa;
-    --success-color: #a6e3a1;
-    --error-color: #f38ba8;
-    --warning-color: #f9e2af;
-    --border-color: #45475a;
-    --btn-bg: #313244;
-    --btn-hover: #45475a;
+    --bg-color: #0f0f1a;
+    --panel-bg: #1a1a2e;
+    --panel-bg-light: #252542;
+    --text-color: #e8e8f0;
+    --accent-color: #7c3aed;
+    --accent-color-light: #a78bfa;
+    --success-color: #10b981;
+    --error-color: #ef4444;
+    --warning-color: #f59e0b;
+    --info-color: #3b82f6;
+    --border-color: #3f3f5a;
+    --btn-bg: #2d2d4a;
+    --btn-hover: #3d3d5c;
+    
+    /* Цвета ролей */
+    --mafia-color: #ef4444;
+    --civilian-color: #3b82f6;
+    --doctor-color: #10b981;
+    --commissioner-color: #f59e0b;
+    --dead-color: #6b7280;
 }
 
 * {
@@ -19,146 +31,209 @@
 
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background-color: var(--bg-color);
+    background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 100%);
     color: var(--text-color);
-    line-height: 1.6;
-    padding: 20px;
+    min-height: 100vh;
+    padding: 15px;
 }
 
-.container {
-    max-width: 1400px;
+.app-container {
+    max-width: 1600px;
     margin: 0 auto;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
+    display: grid;
+    grid-template-columns: 350px 1fr 65vh;
+    grid-template-rows: auto 1fr;
+    gap: 15px;
     height: 95vh;
 }
 
-header {
+/* Header */
+.app-header {
+    grid-column: 1 / -1;
+    background: var(--panel-bg);
+    border-radius: 12px;
+    padding: 15px 25px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 15px 20px;
-    background-color: var(--panel-bg);
-    border-radius: 8px;
     border: 1px solid var(--border-color);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 
-h1 {
+.app-title {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.app-title h1 {
     font-size: 1.5rem;
-    color: var(--accent-color);
+    background: linear-gradient(90deg, var(--accent-color-light), #c084fc);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
 
-h2 {
-    font-size: 1.2rem;
-    margin-bottom: 15px;
-    color: var(--accent-color);
-    border-bottom: 1px solid var(--border-color);
-    padding-bottom: 5px;
+.server-selector {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.server-selector select {
+    padding: 8px 15px;
+    background: var(--btn-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    border-radius: 6px;
+    cursor: pointer;
 }
 
 .connection-status {
     display: flex;
     align-items: center;
     gap: 10px;
-    font-weight: bold;
+    padding: 8px 15px;
+    background: var(--btn-bg);
+    border-radius: 20px;
+    border: 1px solid var(--border-color);
 }
 
 .status-indicator {
-    width: 12px;
-    height: 12px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
-    display: inline-block;
+    animation: pulse 2s infinite;
 }
 
-.status-indicator.connected { background-color: var(--success-color); box-shadow: 0 0 8px var(--success-color); }
-.status-indicator.disconnected { background-color: var(--error-color); }
-.status-indicator.connecting { background-color: var(--warning-color); }
-
-.main-content {
-    display: flex;
-    gap: 20px;
-    flex: 1;
-    min-height: 0; /* Важно для скролла внутри flex-контейнера */
+.status-indicator.connected {
+    background: var(--success-color);
+    box-shadow: 0 0 10px var(--success-color);
 }
 
-.controls-panel {
-    flex: 1;
+.status-indicator.disconnected {
+    background: var(--error-color);
+    animation: none;
+}
+
+.status-indicator.connecting {
+    background: var(--warning-color);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Левая панель - Управление */
+.control-panel {
     display: flex;
     flex-direction: column;
-    gap: 15px;
+    gap: 12px;
     overflow-y: auto;
     padding-right: 5px;
 }
 
-.logs-panel {
-    flex: 1.5;
-    display: flex;
-    flex-direction: column;
-}
-
 .card {
-    background-color: var(--panel-bg);
-    border-radius: 8px;
-    padding: 20px;
+    background: var(--panel-bg);
+    border-radius: 10px;
+    padding: 18px;
     border: 1px solid var(--border-color);
+    transition: all 0.3s ease;
 }
 
-.h-100 {
-    height: 100%;
+.card:hover {
+    border-color: var(--accent-color);
+    box-shadow: 0 0 15px rgba(124, 58, 237, 0.1);
+}
+
+.card-header {
     display: flex;
-    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.card-icon {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-color);
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.card h2 {
+    font-size: 1rem;
+    color: var(--text-color);
+    font-weight: 600;
 }
 
 .form-group {
     margin-bottom: 12px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
 }
 
-label {
-    min-width: 120px;
-    font-size: 0.9rem;
+.form-group label {
+    display: block;
+    font-size: 0.85rem;
+    color: #a0a0b0;
+    margin-bottom: 5px;
+}
+
+.form-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
 }
 
 input[type="text"],
 input[type="number"],
 select {
-    flex: 1;
-    padding: 8px 12px;
-    background-color: var(--bg-color);
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg-color);
     border: 1px solid var(--border-color);
     color: var(--text-color);
-    border-radius: 4px;
-    font-family: monospace;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    transition: all 0.2s;
 }
 
 input:focus, select:focus {
     outline: none;
     border-color: var(--accent-color);
+    box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.2);
 }
 
 input[readonly] {
+    background: var(--panel-bg-light);
     opacity: 0.7;
-    cursor: not-allowed;
 }
 
 button {
-    padding: 8px 16px;
-    background-color: var(--btn-bg);
+    padding: 10px 18px;
+    background: var(--btn-bg);
     color: var(--text-color);
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
-    transition: background-color 0.2s;
     font-weight: 500;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
 }
 
 button:hover:not(:disabled) {
-    background-color: var(--btn-hover);
+    background: var(--btn-hover);
     border-color: var(--accent-color);
+    transform: translateY(-1px);
 }
 
 button:disabled {
@@ -166,108 +241,684 @@ button:disabled {
     cursor: not-allowed;
 }
 
+button.primary {
+    background: linear-gradient(135deg, var(--accent-color), #9333ea);
+    border: none;
+}
+
+button.primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #9333ea, #7c3aed);
+}
+
+button.success {
+    background: linear-gradient(135deg, var(--success-color), #059669);
+    border: none;
+}
+
+button.danger {
+    background: linear-gradient(135deg, var(--error-color), #dc2626);
+    border: none;
+}
+
+.btn-group {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.checkbox-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.checkbox-group input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent-color);
+}
+
+.checkbox-group label {
+    margin: 0;
+    cursor: pointer;
+}
+
 .btn-small {
-    padding: 4px 8px;
+    padding: 6px 12px;
     font-size: 0.8rem;
 }
 
-.divider {
-    height: 1px;
-    background-color: var(--border-color);
-    margin: 15px 0;
+/* Секция комнаты */
+.room-info {
+    background: var(--panel-bg-light);
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 10px;
+    display: none;
 }
 
-/* Стили логов */
-.logs-header {
+.room-info.visible {
+    display: block;
+    animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.room-info-item {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.85rem;
 }
 
-.logs-container {
-    flex: 1;
-    background-color: #11111b;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    padding: 10px;
-    overflow-y: auto;
-    font-family: 'Consolas', 'Courier New', monospace;
-    font-size: 0.85rem;
+.room-info-item:last-child {
+    border-bottom: none;
+}
+
+.room-info-label {
+    color: #a0a0b0;
+}
+
+.room-info-value {
+    font-family: monospace;
+    color: var(--accent-color-light);
+    word-break: break-all;
+    font-size: 0.75rem;
+}
+
+/* Центральная панель - Чат и игра */
+.game-panel {
     display: flex;
     flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+}
+
+/* Информация о игре */
+.game-info-bar {
+    display: flex;
+    gap: 15px;
+    flex-wrap: wrap;
+    background: var(--panel-bg);
+    border-radius: 10px;
+    padding: 12px 18px;
+    border: 1px solid var(--border-color);
+}
+
+.game-info-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.game-info-label {
+    font-size: 0.8rem;
+    color: #a0a0b0;
+}
+
+.game-info-value {
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+}
+
+.phase-badge {
+    background: var(--accent-color);
+    color: white;
+}
+
+.role-badge {
+    background: var(--civilian-color);
+    color: white;
+}
+
+.role-badge.mafia { background: var(--mafia-color); }
+.role-badge.doctor { background: var(--doctor-color); }
+.role-badge.commissioner { background: var(--commissioner-color); }
+
+.status-badge {
+    background: var(--success-color);
+    color: white;
+}
+
+.status-badge.dead {
+    background: var(--dead-color);
+}
+
+.day-badge {
+    background: var(--info-color);
+    color: white;
+}
+
+/* Вкладки чатов */
+.chat-tabs {
+    display: flex;
     gap: 5px;
+    background: var(--panel-bg);
+    padding: 8px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+}
+
+.chat-tab {
+    flex: 1;
+    padding: 12px 15px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    color: #a0a0b0;
+    transition: all 0.2s;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.chat-tab:hover {
+    background: var(--btn-bg);
+    color: var(--text-color);
+}
+
+.chat-tab.active {
+    background: var(--accent-color);
+    color: white;
+}
+
+.chat-tab.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.chat-tab .tab-name {
+    font-size: 0.9rem;
+}
+
+.chat-tab .tab-status {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.2);
+}
+
+.chat-tab .tab-status.inactive {
+    background: var(--error-color);
+}
+
+/* Контейнер чата */
+.chat-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-bg);
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+    min-height: 0;
+}
+
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.chat-message {
+    display: flex;
+    flex-direction: column;
+    max-width: 80%;
+    animation: messageIn 0.2s ease;
+}
+
+@keyframes messageIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.chat-message.own {
+    align-self: flex-end;
+}
+
+.chat-message.other {
+    align-self: flex-start;
+}
+
+.message-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+    font-size: 0.8rem;
+}
+
+.message-sender {
+    font-weight: 600;
+    color: var(--accent-color-light);
+}
+
+.chat-message.own .message-sender {
+    color: var(--success-color);
+}
+
+.message-time {
+    color: #6b7280;
+    font-size: 0.75rem;
+}
+
+.message-ai-badge {
+    background: var(--warning-color);
+    color: #000;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.65rem;
+    font-weight: bold;
+}
+
+.message-content {
+    background: var(--panel-bg-light);
+    padding: 10px 14px;
+    border-radius: 12px;
+    border-top-left-radius: 4px;
+    line-height: 1.4;
+}
+
+.chat-message.own .message-content {
+    background: var(--accent-color);
+    border-top-left-radius: 12px;
+    border-top-right-radius: 4px;
+}
+
+.chat-input-area {
+    display: flex;
+    gap: 10px;
+    padding: 15px;
+    background: var(--panel-bg-light);
+    border-top: 1px solid var(--border-color);
+}
+
+.chat-input-area input {
+    flex: 1;
+}
+
+/* Правая панель - Игроки и логи */
+.right-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+}
+
+/* Список игроков */
+.players-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.player-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--panel-bg-light);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    border: 1px solid transparent;
+    transition: all 0.2s;
+}
+
+.player-item:hover {
+    border-color: var(--border-color);
+}
+
+.player-item.is-self {
+    border-color: var(--accent-color);
+    background: rgba(124, 58, 237, 0.1);
+}
+
+.player-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 0.9rem;
+    flex-shrink: 0;
+}
+
+.player-avatar.ai {
+    background: var(--warning-color);
+    color: #000;
+}
+
+.player-avatar.human {
+    background: var(--info-color);
+    color: white;
+}
+
+.player-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.player-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.player-role {
+    font-size: 0.75rem;
+    color: #a0a0b0;
+}
+
+.player-status {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.player-status.alive {
+    background: var(--success-color);
+    color: white;
+}
+
+.player-status.dead {
+    background: var(--dead-color);
+    color: white;
+}
+
+/* Панель управления игрой */
+.game-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.action-section {
+    background: var(--panel-bg-light);
+    border-radius: 8px;
+    padding: 12px;
+}
+
+.action-title {
+    font-size: 0.85rem;
+    color: #a0a0b0;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.target-select {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 6px;
+    margin-bottom: 10px;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.target-option {
+    padding: 8px 10px;
+    background: var(--btn-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: center;
+    font-size: 0.8rem;
+    transition: all 0.2s;
+}
+
+.target-option:hover {
+    border-color: var(--accent-color);
+}
+
+.target-option.selected {
+    background: var(--accent-color);
+    border-color: var(--accent-color);
+}
+
+/* Логи */
+.logs-container {
+    flex: 1;
+    background: #0a0a12;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px;
+    overflow-y: auto;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 0.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 200px;
 }
 
 .log-entry {
     padding: 6px 8px;
     border-radius: 4px;
-    border-left: 3px solid transparent;
-    word-break: break-all;
-    white-space: pre-wrap;
+    background: var(--panel-bg-light);
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
 }
 
 .log-time {
-    color: #6c7086;
-    margin-right: 8px;
-    font-size: 0.8rem;
+    color: #6b7280;
+    font-size: 0.75rem;
+    white-space: nowrap;
 }
 
 .log-type {
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.65rem;
     font-weight: bold;
-    margin-right: 8px;
+    text-transform: uppercase;
+    white-space: nowrap;
 }
 
-/* Типы логов */
-.log-info { border-left-color: var(--accent-color); background-color: rgba(137, 180, 250, 0.05); }
-.log-info .log-type { color: var(--accent-color); }
+.log-type.info { background: var(--info-color); color: white; }
+.log-type.success { background: var(--success-color); color: white; }
+.log-type.error { background: var(--error-color); color: white; }
+.log-type.warning { background: var(--warning-color); color: #000; }
+.log-type.ws-send { background: #8b5cf6; color: white; }
+.log-type.ws-recv { background: #06b6d4; color: white; }
+.log-type.ai-msg { background: var(--warning-color); color: #000; }
 
-.log-success { border-left-color: var(--success-color); background-color: rgba(166, 227, 161, 0.05); }
-.log-success .log-type { color: var(--success-color); }
+.log-content {
+    flex: 1;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
 
-.log-error { border-left-color: var(--error-color); background-color: rgba(243, 139, 168, 0.05); }
-.log-error .log-type { color: var(--error-color); }
+.log-data {
+    color: #9ca3af;
+    font-size: 0.75rem;
+    margin-top: 4px;
+    white-space: pre-wrap;
+}
 
-.log-ws-send { border-left-color: #cba6f7; background-color: rgba(203, 166, 247, 0.05); }
-.log-ws-send .log-type { color: #cba6f7; }
-
-.log-ws-recv { border-left-color: #f9e2af; background-color: rgba(249, 226, 175, 0.05); }
-.log-ws-recv .log-type { color: #f9e2af; }
-
-/* Скроллбар */
+/* Скроллбары */
 ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
 }
+
 ::-webkit-scrollbar-track {
     background: var(--bg-color);
+    border-radius: 3px;
 }
+
 ::-webkit-scrollbar-thumb {
     background: var(--border-color);
-    border-radius: 4px;
+    border-radius: 3px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
     background: var(--accent-color);
 }
 
-/* Стили для сообщений от ИИ */
-.log-ai-message {
-    border-left-color: #94e2d5 !important;
-    background-color: rgba(148, 226, 213, 0.1) !important;
-    border: 1px solid rgba(148, 226, 213, 0.3);
+/* Адаптивность */
+@media (max-width: 1200px) {
+    .app-container {
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: auto auto 1fr;
+    }
+    .game-panel {
+        grid-column: 1 / -1;
+    }
 }
 
-.log-ai-message .log-type {
-    color: #94e2d5 !important;
+@media (max-width: 768px) {
+    .app-container {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto auto;
+    }
+    .control-panel, .right-panel {
+        max-height: 400px;
+    }
 }
 
-/* Анимация для новых сообщений от ИИ */
-@keyframes aiMessagePulse {
-    0% { box-shadow: 0 0 0 0 rgba(148, 226, 213, 0.4); }
-    70% { box-shadow: 0 0 0 10px rgba(148, 226, 213, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(148, 226, 213, 0); }
+/* Turing Test */
+.turing-test-container {
+    background: var(--panel-bg);
+    border-radius: 10px;
+    padding: 20px;
+    border: 1px solid var(--border-color);
 }
 
-.log-ai-message {
-    animation: aiMessagePulse 2s ease-out;
+.turing-player {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 15px;
+    background: var(--panel-bg-light);
+    border-radius: 8px;
+    margin-bottom: 10px;
+}
+
+.turing-player-name {
+    flex: 1;
+    font-weight: 600;
+}
+
+.turing-vote-btns {
+    display: flex;
+    gap: 10px;
+}
+
+.turing-vote-btn {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.turing-vote-btn.human {
+    background: var(--info-color);
+    color: white;
+}
+
+.turing-vote-btn.ai {
+    background: var(--warning-color);
+    color: #000;
+}
+
+.turing-vote-btn:hover {
+    transform: scale(1.05);
+}
+
+/* Результаты голосования */
+.voting-results {
+    background: var(--panel-bg-light);
+    border-radius: 8px;
+    padding: 15px;
+    margin-top: 10px;
+}
+
+.vote-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.vote-bar-name {
+    width: 100px;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.vote-bar-track {
+    flex: 1;
+    height: 20px;
+    background: var(--bg-color);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.vote-bar-fill {
+    height: 100%;
+    background: var(--accent-color);
+    transition: width 0.3s ease;
+}
+
+.vote-bar-count {
+    width: 30px;
+    text-align: right;
+    font-weight: 600;
+}
+
+/* Победитель */
+.winner-display {
+    text-align: center;
+    padding: 30px;
+    background: linear-gradient(135deg, var(--accent-color), #9333ea);
+    border-radius: 12px;
+    margin-top: 15px;
+    animation: winnerPulse 2s infinite;
+}
+
+@keyframes winnerPulse {
+    0%, 100% { box-shadow: 0 0 20px rgba(124, 58, 237, 0.5); }
+    50% { box-shadow: 0 0 40px rgba(124, 58, 237, 0.8); }
+}
+
+.winner-title {
+    font-size: 1.5rem;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+
+.winner-team {
+    font-size: 2rem;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+/* Divider */
+.divider {
+    height: 1px;
+    background-color: var(--border-color);
+    margin: 15px 0;
 }
