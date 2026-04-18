@@ -1,7 +1,7 @@
 import asyncio
 import random
 from enum import Enum
-from typing import Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 from app.models.room import Room
 from app.models.player import Player, PlayerRole
 from app.models.game import Game, GameStatus
@@ -10,6 +10,9 @@ from app.db.session import AsyncSession
 from sqlalchemy import select, update
 import json
 import logging
+
+if TYPE_CHECKING:
+    from app.websocket.manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -24,16 +27,24 @@ class GamePhase(str, Enum):
 
 
 class StateMachine:
-    def __init__(self, room_id: int, db: AsyncSession):
+    def __init__(
+        self,
+        room_id: int,
+        db: AsyncSession,
+        ws_manager: Optional["ConnectionManager"] = None,
+    ) -> None:
         self.room_id = room_id
         self.db = db
+        self.ws_manager = ws_manager
         self.current_phase = GamePhase.LOBBY
         self.game_id: Optional[int] = None
-        self.night_actions: Dict[int, Dict] = {}  # player_id -> action
+        self.night_actions: Dict[int, Dict[str, Any]] = {}  # player_id -> action
         self.votes: Dict[int, int] = {}  # voter_id -> target_player_id
-        self.day_number = 1
-        self.is_running = False
+        self.day_number: int = 1
+        self.is_running: bool = False
         self.task: Optional[asyncio.Task] = None
+        # Итоги последней ночи для рассылки в начале дня
+        self.night_summary: Dict[str, Any] = {}
 
     async def start(self):
         """Start the state machine."""
@@ -55,6 +66,46 @@ class StateMachine:
             except asyncio.CancelledError:
                 pass
         logger.info(f"State machine stopped for room {self.room_id}")
+
+    # ------------------------------------------------------------------
+    # Вспомогательные методы
+    # ------------------------------------------------------------------
+
+    async def _broadcast(self, message: Dict[str, Any]) -> None:
+        """Разослать сообщение всем игрокам комнаты через WebSocket.
+
+        Безопасно обрабатывает случай, когда ws_manager не передан (тесты,
+        автономный запуск), — просто логирует и не падает.
+        """
+        if self.ws_manager is None:
+            logger.debug(
+                f"ws_manager не задан для комнаты {self.room_id}; "
+                f"пропуск рассылки события '{message.get('type')}'"
+            )
+            return
+        try:
+            await self.ws_manager.broadcast_to_room(self.room_id, message)
+        except Exception as exc:
+            logger.error(
+                f"Ошибка рассылки события '{message.get('type')}' "
+                f"в комнату {self.room_id}: {exc}"
+            )
+
+    async def _send_to_player(self, player_id: int, message: Dict[str, Any]) -> None:
+        """Отправить сообщение конкретному игроку через WebSocket."""
+        if self.ws_manager is None:
+            logger.debug(
+                f"ws_manager не задан; пропуск личного события '{message.get('type')}' "
+                f"для игрока {player_id}"
+            )
+            return
+        try:
+            await self.ws_manager.send_to_player(player_id, message)
+        except Exception as exc:
+            logger.error(
+                f"Ошибка отправки события '{message.get('type')}' "
+                f"игроку {player_id}: {exc}"
+            )
 
     async def run(self):
         """Main state machine loop."""
@@ -145,19 +196,38 @@ class StateMachine:
         await self.db.commit()
         self.game_id = game.id
 
-        # Notify players of their roles (via WebSocket)
-        # This would be done by sending a personal_info event to each player
-        # For now, we just log
+        # Уведомить каждого игрока о его роли персональным сообщением
         for player in players:
             logger.info(f"Player {player.id} ({player.nickname}) assigned role {player.role}")
+            await self._send_to_player(
+                player.id,
+                {
+                    "type": "role_assigned",
+                    "player_id": player.id,
+                    "role": player.role.value if player.role else None,
+                    "day_number": self.day_number,
+                    "message": f"Ваша роль: {player.role.value if player.role else 'unknown'}",
+                },
+            )
 
         # Transition to night phase
         self.current_phase = GamePhase.NIGHT
         await self.update_game_status(GameStatus.NIGHT)
 
-    async def handle_night(self):
+    async def handle_night(self) -> None:
         """Handle the night phase: perform night actions."""
         logger.info(f"Starting night phase for room {self.room_id}, day {self.day_number}")
+
+        # ── Уведомить всех игроков о начале ночной фазы ──────────────────────
+        await self._broadcast(
+            {
+                "type": "night_started",
+                "phase": GamePhase.NIGHT.value,
+                "day_number": self.day_number,
+                "message": "Наступила ночь. Мафия, доктор и комиссар выбирают жертв...",
+            }
+        )
+
         # In a real game, we would:
         # 1. Ask mafia to choose a victim
         # 2. Ask doctor to choose a player to heal
@@ -207,55 +277,118 @@ class StateMachine:
         self.current_phase = GamePhase.DAY
         await self.update_game_status(GameStatus.DAY)
 
-    async def resolve_night_actions(self):
+    async def resolve_night_actions(self) -> None:
         """Resolve the night actions and update player states."""
         logger.info(f"Resolving night actions for room {self.room_id}")
-        # We'll keep track of who was killed and who was healed
-        killed_by_mafia = set()
-        healed_by_doctor = set()
-        investigated_results = {}  # target_id -> is_mafia
 
-        for action in self.night_actions.values():
+        killed_by_mafia: Set[int] = set()
+        healed_by_doctor: Set[int] = set()
+        # commissioner_id -> {target_id, is_mafia}
+        investigated_results: Dict[int, Dict[str, Any]] = {}
+
+        # Итерируемся по парам player_id -> action, чтобы знать, кто комиссар
+        for actor_id, action in self.night_actions.items():
             if action["action"] == "kill":
                 killed_by_mafia.add(action["target_id"])
             elif action["action"] == "heal":
                 healed_by_doctor.add(action["target_id"])
             elif action["action"] == "investigate":
-                target_id = action["target_id"]
-                # Get the target player
-                target_player = await self.db.get(Player, action["player_id"])  # This is the commissioner
-                # Actually, we need the target player's role
-                target = await self.db.get(Player, target_id)
+                target_id: int = action["target_id"]
+                target: Optional[Player] = await self.db.get(Player, target_id)
                 if target:
-                    investigated_results[target_id] = (target.role == PlayerRole.MAFIA)
+                    investigated_results[actor_id] = {
+                        "target_id": target_id,
+                        "target_nickname": target.nickname,
+                        "is_mafia": target.role == PlayerRole.MAFIA,
+                    }
 
         # Determine who actually dies: killed by mafia and not healed
-        actually_killed = killed_by_mafia - healed_by_doctor
+        actually_killed: Set[int] = killed_by_mafia - healed_by_doctor
 
-        # Update player states
+        # Собираем информацию о убитых игроках для night_summary
+        killed_details: List[Dict[str, Any]] = []
         for player_id in actually_killed:
-            player = await self.db.get(Player, player_id)
+            player: Optional[Player] = await self.db.get(Player, player_id)
             if player:
                 player.is_alive = False
                 self.db.add(player)
-                logger.info(f"Player {player_id} was killed during the night")
+                killed_details.append(
+                    {"player_id": player.id, "nickname": player.nickname}
+                )
+                logger.info(f"Player {player_id} ({player.nickname}) was killed during the night")
 
-        # For investigation results, we would typically inform the commissioner
-        # For now, we just log
-        for target_id, is_mafia in investigated_results.items():
-            logger.info(f"Commissioner investigation on player {target_id}: is_mafia = {is_mafia}")
+        # Информация о вылеченных
+        healed_details: List[Dict[str, Any]] = []
+        for player_id in healed_by_doctor:
+            player = await self.db.get(Player, player_id)
+            if player:
+                healed_details.append(
+                    {"player_id": player.id, "nickname": player.nickname}
+                )
 
         await self.db.commit()
+
+        # Сохраняем итоги ночи для рассылки при наступлении дня
+        self.night_summary = {
+            "day_number": self.day_number,
+            "killed": killed_details,
+            "healed": healed_details,
+            # Результаты расследований отправляем лично комиссару ниже
+        }
+
+        # Отправляем результат расследования лично каждому комиссару
+        for commissioner_id, result in investigated_results.items():
+            logger.info(
+                f"Commissioner {commissioner_id} investigated player {result['target_id']}: "
+                f"is_mafia={result['is_mafia']}"
+            )
+            await self._send_to_player(
+                commissioner_id,
+                {
+                    "type": "investigation_result",
+                    "target_id": result["target_id"],
+                    "target_nickname": result["target_nickname"],
+                    "is_mafia": result["is_mafia"],
+                    "day_number": self.day_number,
+                },
+            )
 
         # Check if the game is over (e.g., all mafia dead or mafia outnumber civilians)
         await self.check_game_over()
 
-    async def handle_day(self):
+    async def handle_day(self) -> None:
         """Handle the day phase: discussion and preparation for voting."""
         logger.info(f"Starting day phase for room {self.room_id}, day {self.day_number}")
+
+        # ── Рассылаем итоги ночи всем игрокам ────────────────────────────────
+        await self._broadcast(
+            {
+                "type": "day_started",
+                "phase": GamePhase.DAY.value,
+                "day_number": self.night_summary.get("day_number", self.day_number),
+                "night_results": {
+                    "killed": self.night_summary.get("killed", []),
+                    "healed": self.night_summary.get("healed", []),
+                },
+                "message": (
+                    "Наступил день. Обсудите произошедшее и проголосуйте за подозреваемого."
+                ),
+            }
+        )
+
         # In a real game, players discuss and then vote.
         # We'll just wait for a bit and then transition to voting.
         await asyncio.sleep(5)  # Simulate discussion time
+
+        # ── Уведомить о начале фазы голосования ──────────────────────────────
+        await self._broadcast(
+            {
+                "type": "voting_started",
+                "phase": GamePhase.VOTING.value,
+                "day_number": self.day_number,
+                "message": "Время голосовать! Выберите игрока для исключения.",
+            }
+        )
 
         # Transition to voting phase
         self.current_phase = GamePhase.VOTING
@@ -318,19 +451,20 @@ class StateMachine:
             self.current_phase = GamePhase.NIGHT
             await self.update_game_status(GameStatus.NIGHT)
 
-    async def check_game_over(self):
+    async def check_game_over(self) -> None:
         """Check if the game is over and set the phase to finished if so."""
         # Get alive players
         result = await self.db.execute(
             select(Player).where(Player.room_id == self.room_id, Player.is_alive == True)
         )
         alive_players = result.scalars().all()
-        alive_mafia = [p for p in alive_players if p.role == PlayerRole.MAFIA]
-        alive_civilians = [p for p in alive_players if p.role != PlayerRole.MAFIA]
+        alive_mafia: List[Player] = [p for p in alive_players if p.role == PlayerRole.MAFIA]
+        alive_civilians: List[Player] = [p for p in alive_players if p.role != PlayerRole.MAFIA]
 
         # Game over conditions:
         # 1. All mafia are dead -> civilians win
         # 2. Mafia number >= civilian number -> mafia wins (since they can control the vote)
+        winner: Optional[str]
         if not alive_mafia:
             logger.info(f"Game over: all mafia are dead. Civilians win in room {self.room_id}")
             winner = "civilians"
@@ -347,15 +481,42 @@ class StateMachine:
 
         # Update the game record with the winner
         if self.game_id:
-            game = await self.db.get(Game, self.game_id)
+            game: Optional[Game] = await self.db.get(Game, self.game_id)
             if game:
                 game.winner = winner
                 self.db.add(game)
                 await self.db.commit()
 
-        # Notify players of the game end (via WebSocket)
-        # This would be done by sending a reveal_endgame event
         logger.info(f"Game finished in room {self.room_id}. Winner: {winner}")
+
+        # ── Уведомить всех игроков о завершении игры ─────────────────────────
+        # Раскрываем роли ВСЕХ игроков (включая мёртвых) для финального экрана
+        all_result = await self.db.execute(
+            select(Player).where(Player.room_id == self.room_id)
+        )
+        all_players: List[Player] = list(all_result.scalars().all())
+        reveal_players: List[Dict[str, Any]] = [
+            {
+                "player_id": p.id,
+                "nickname": p.nickname,
+                "role": p.role.value if p.role else None,
+                "is_alive": p.is_alive,
+            }
+            for p in all_players
+        ]
+        await self._broadcast(
+            {
+                "type": "game_over",
+                "winner": winner,
+                "day_number": self.day_number,
+                "players": reveal_players,
+                "message": (
+                    "Мирные жители победили! Мафия уничтожена."
+                    if winner == "civilians"
+                    else "Мафия победила! Она взяла город под контроль."
+                ),
+            }
+        )
 
     async def update_game_status(self, status: GameStatus):
         """Update the game status in the database."""

@@ -18,6 +18,8 @@ from app.core.config import settings
 from app.db.session import init_db, close_db
 from app.redis.client import close_redis
 from app.api.rooms import router as rooms_router
+from app.api.players import router as players_router
+from app.api.auth import router as auth_router
 from app.websocket.handlers import router as websocket_router
 from app.websocket.manager import manager
 from app.models import *  # Импорт всех моделей для регистрации в SQLAlchemy
@@ -88,6 +90,8 @@ app.add_middleware(
 
 # Регистрация роутеров API
 app.include_router(rooms_router, prefix="/api/rooms", tags=["rooms"])
+app.include_router(players_router, prefix="/api/players", tags=["players"])
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 
 # Регистрация WebSocket роутера
 app.include_router(websocket_router, tags=["websocket"])

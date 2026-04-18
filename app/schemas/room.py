@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any
 from datetime import datetime
+import json
 
 
 class RoomBase(BaseModel):
@@ -33,6 +34,16 @@ class RoomInDBBase(RoomBase):
     id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+    @field_validator("settings", mode="before")
+    @classmethod
+    def parse_settings(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, ValueError):
+                return None
+        return v
 
     class Config:
         from_attributes = True

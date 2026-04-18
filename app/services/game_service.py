@@ -17,7 +17,7 @@ from app.crud.room import RoomCRUD
 from app.crud.player import PlayerCRUD
 from app.crud.game import GameCRUD
 from app import schemas
-from app.models.room import Room as RoomModel
+from app.models.room import Room as RoomModel, RoomStatus
 from app.models.game import Game as GameModel
 from app.models.player import Player as PlayerModel
 
@@ -43,6 +43,7 @@ class GameService:
         self.ws_manager = ws_manager
         self.active_machines: Dict[int, StateMachine] = {}  # room_id -> StateMachine
         self.tasks: Dict[int, asyncio.Task] = {}  # room_id -> задача таймера
+        self.ready_players: Dict[int, set] = {}  # room_id -> set of ready player_ids
 
     async def _fill_with_ai_players(
         self,
@@ -155,8 +156,8 @@ class GameService:
         room = await self.room_crud.get(db, id=room_id)
         if not room:
             raise ValueError(f"Комната {room_id} не найдена")
-        if room.status != "waiting":
-            raise ValueError(f"Комната не в статусе waiting (статус: {room.status})")
+        if room.status not in (RoomStatus.LOBBY, RoomStatus.STARTING):
+            raise ValueError(f"Комната не в статусе lobby/starting (статус: {room.status})")
 
         # Проверка минимального количества игроков
         players: List[PlayerModel] = await self.player_crud.get_by_room(
@@ -191,15 +192,15 @@ class GameService:
         # Создание записи игры в БД (если ещё не создана)
         game = await self.game_crud.create(
             db,
-            obj_in={
-                "room_id": room_id,
-                "status": "lobby",
-                "day_number": 1,
-            },
+            obj_in=schemas.GameCreate(
+                room_id=room_id,
+                status="lobby",
+                day_number=1,
+            ),
         )
 
-        # Создание State Machine
-        machine = StateMachine(room_id=room_id, db=db)
+        # Создание State Machine с передачей ws_manager для рассылки событий
+        machine = StateMachine(room_id=room_id, db=db, ws_manager=self.ws_manager)
         self.active_machines[room_id] = machine
 
         # Запуск State Machine в фоне
@@ -259,7 +260,7 @@ class GameService:
             await self.room_crud.update(
                 db,
                 db_obj=room,
-                obj_in={"status": "finished"},
+                obj_in=schemas.RoomUpdate(status="finished"),
             )
 
         # Обновление игры в БД
@@ -268,7 +269,7 @@ class GameService:
             await self.game_crud.update(
                 db,
                 db_obj=game,
-                obj_in={"status": "finished", "winner": "aborted"},
+                obj_in=schemas.GameUpdate(status="finished", winner="aborted"),
             )
 
         # Уведомление игроков

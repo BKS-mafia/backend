@@ -35,8 +35,9 @@ async def websocket_endpoint(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    # Verify the player is in the specified room
-    if str(player.room_id) != room_id:
+    # Verify the player is in the specified room (room_id is public UUID, player.room_id is int FK)
+    room = await crud.room.get_by_room_id(db, room_id=room_id)
+    if not room or room.id != player.room_id:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -70,11 +71,25 @@ async def _handle_disconnect(
     Handle player disconnect.
     If a game is running, marks the player as disconnected (is_connected=False)
     without deleting the record from the database.
+    Broadcasts player_disconnected event to remaining room members.
     """
+    room_id = player.room_id
+
+    # Disconnect from manager first (removes this WS, remaining can still receive)
     manager.disconnect(websocket)
 
+    # Broadcast disconnect notification to room
+    await manager.broadcast_to_room(
+        room_id,
+        {
+            "type": "player_disconnected",
+            "player_id": player.id,
+            "nickname": player.nickname,
+        },
+    )
+
     # Check if game is active for this player's room
-    machine = game_service.active_machines.get(player.room_id)
+    machine = game_service.active_machines.get(room_id)
     if machine is not None:
         # Game is in progress — mark player as disconnected, keep in DB
         try:
@@ -85,7 +100,7 @@ async def _handle_disconnect(
             )
             logger.info(
                 f"Player {player.id} ({player.nickname!r}) marked as disconnected "
-                f"during active game in room {player.room_id}"
+                f"during active game in room {room_id}"
             )
         except Exception as exc:
             logger.error(
@@ -94,7 +109,7 @@ async def _handle_disconnect(
     else:
         logger.info(
             f"Player {player.id} ({player.nickname!r}) disconnected "
-            f"(no active game in room {player.room_id})"
+            f"(no active game in room {room_id})"
         )
 
 
@@ -116,6 +131,14 @@ async def handle_websocket_message(
         await handle_vote_action(websocket, player, message, db)
     elif event_type == "start_game":
         await handle_start_game(websocket, player, message, db)
+    elif event_type == "night_action":
+        await handle_night_action(websocket, player, message, db)
+    elif event_type == "ready":
+        await handle_ready(websocket, player, message, db)
+    elif event_type == "reconnect":
+        await handle_reconnect(websocket, player, message, db)
+    elif event_type == "kick_player":
+        await handle_kick_player(websocket, player, message, db)
     else:
         await manager.send_personal_message(
             {"error": f"Unknown event type: {event_type!r}"}, websocket
@@ -382,3 +405,313 @@ async def handle_vote_action(
 
     except ValueError as exc:
         await manager.send_personal_message({"error": str(exc)}, websocket)
+
+
+async def handle_night_action(
+    websocket: WebSocket,
+    player: PlayerModel,
+    message: Dict[str, Any],
+    db: AsyncSession,
+) -> None:
+    """
+    Handle a 'night_action' event from a player during the night phase.
+
+    Expected payload:
+        {
+            "type": "night_action",
+            "action_type": "kill" | "heal" | "check",
+            "target_player_id": <int>
+        }
+
+    Role restrictions:
+        - MAFIA: "kill"
+        - DOCTOR: "heal"
+        - COMMISSIONER: "check"
+    """
+    machine = game_service.active_machines.get(player.room_id)
+    if not machine:
+        await manager.send_personal_message(
+            {"error": "No active game found in this room"}, websocket
+        )
+        return
+
+    if machine.current_phase != GamePhase.NIGHT:
+        await manager.send_personal_message(
+            {"error": "Night actions are only available during the night phase"}, websocket
+        )
+        return
+
+    action_type: str = message.get("action_type", "")
+    target_player_id: Optional[int] = message.get("target_player_id")
+
+    valid_action_types = ("kill", "heal", "check")
+    if action_type not in valid_action_types:
+        await manager.send_personal_message(
+            {"error": f"action_type must be one of: {', '.join(valid_action_types)}"}, websocket
+        )
+        return
+
+    if not target_player_id:
+        await manager.send_personal_message(
+            {"error": "target_player_id is required"}, websocket
+        )
+        return
+
+    # Verify that the player is alive
+    if not player.is_alive:
+        await manager.send_personal_message(
+            {"error": "Dead players cannot perform actions"}, websocket
+        )
+        return
+
+    try:
+        await game_service.submit_night_action(
+            db=db,
+            room_id=player.room_id,
+            player_id=player.id,
+            action={"action": action_type, "target_id": target_player_id},
+        )
+        await manager.send_personal_message(
+            {
+                "type": "night_action_accepted",
+                "player_id": player.id,
+                "action_type": action_type,
+                "target_player_id": target_player_id,
+            },
+            websocket,
+        )
+        logger.info(
+            f"Night action from player {player.id} ({player.nickname!r}): "
+            f"{action_type} -> target {target_player_id}"
+        )
+    except ValueError as exc:
+        await manager.send_personal_message({"error": str(exc)}, websocket)
+
+
+async def handle_ready(
+    websocket: WebSocket,
+    player: PlayerModel,
+    message: Dict[str, Any],
+    db: AsyncSession,
+) -> None:
+    """
+    Handle a 'ready' event — player indicates they are ready to start.
+
+    Expected payload:
+        {"type": "ready"}
+
+    When all players in the room mark themselves as ready,
+    the host receives a 'all_players_ready' notification.
+    """
+    room_id = player.room_id
+
+    # Track ready players per room
+    if room_id not in game_service.ready_players:
+        game_service.ready_players[room_id] = set()
+    game_service.ready_players[room_id].add(player.id)
+
+    await manager.send_personal_message(
+        {"type": "ready_acknowledged", "player_id": player.id}, websocket
+    )
+
+    # Broadcast to all that this player is ready
+    await manager.broadcast_to_room(
+        room_id,
+        {
+            "type": "player_ready",
+            "player_id": player.id,
+            "nickname": player.nickname,
+        },
+    )
+
+    # Check if all human (connected) players are ready
+    all_players: List[PlayerModel] = await crud.player.get_by_room(db, room_id=room_id)
+    human_players = [p for p in all_players if not p.is_ai and p.is_connected]
+    ready_count = len(game_service.ready_players[room_id])
+    total_count = len(human_players)
+
+    if total_count > 0 and ready_count >= total_count:
+        # Notify the host that everyone is ready
+        room = await crud.room.get(db, id=room_id)
+        if room:
+            await manager.broadcast_to_room(
+                room_id,
+                {
+                    "type": "all_players_ready",
+                    "room_id": room_id,
+                    "ready_count": ready_count,
+                    "total_count": total_count,
+                },
+            )
+        logger.info(f"All {ready_count} players ready in room {room_id}")
+
+
+async def handle_reconnect(
+    websocket: WebSocket,
+    player: PlayerModel,
+    message: Dict[str, Any],
+    db: AsyncSession,
+) -> None:
+    """
+    Handle a 'reconnect' event — player requests current game state after reconnecting.
+
+    Expected payload:
+        {"type": "reconnect", "session_token": "<uuid>"}
+
+    Verifies the token and sends back the current game state.
+    """
+    session_token: Optional[str] = message.get("session_token")
+
+    # If token is provided, verify it matches the authenticated player
+    if session_token and session_token != player.session_token:
+        await manager.send_personal_message(
+            {"error": "Invalid session token"}, websocket
+        )
+        return
+
+    # Mark player as connected again
+    try:
+        await crud.player.update(
+            db,
+            db_obj=player,
+            obj_in=schemas.PlayerUpdate(is_connected=True),
+        )
+    except Exception as exc:
+        logger.error(f"Failed to mark player {player.id} as connected: {exc}")
+
+    room_id = player.room_id
+    machine = game_service.active_machines.get(room_id)
+
+    # Build current state payload
+    all_players: List[PlayerModel] = await crud.player.get_by_room(db, room_id=room_id)
+    game = await crud.game.get_by_room(db, room_id=room_id)
+
+    state_payload: Dict[str, Any] = {
+        "type": "reconnect_state",
+        "player_id": player.id,
+        "nickname": player.nickname,
+        "role": player.role.value if player.role else None,
+        "is_alive": player.is_alive,
+        "room_id": room_id,
+        "game_id": game.id if game else None,
+        "game_status": game.status if game else None,
+        "phase": machine.current_phase.value if machine and machine.current_phase else None,
+        "day_number": machine.day_number if machine else None,
+        "players": [
+            {
+                "id": p.id,
+                "nickname": p.nickname,
+                "is_alive": p.is_alive,
+                "is_ai": p.is_ai,
+                "is_connected": p.is_connected,
+            }
+            for p in all_players
+        ],
+    }
+
+    await manager.send_personal_message(state_payload, websocket)
+
+    # Notify room that this player reconnected
+    await manager.broadcast_to_room(
+        room_id,
+        {
+            "type": "player_reconnected",
+            "player_id": player.id,
+            "nickname": player.nickname,
+        },
+    )
+    logger.info(f"Player {player.id} ({player.nickname!r}) reconnected to room {room_id}")
+
+
+async def handle_kick_player(
+    websocket: WebSocket,
+    player: PlayerModel,
+    message: Dict[str, Any],
+    db: AsyncSession,
+) -> None:
+    """
+    Handle a 'kick_player' event — host removes a player from the room.
+
+    Expected payload:
+        {"type": "kick_player", "player_id": <int>}
+
+    Only the room host (session_token == room.host_token) can kick players.
+    """
+    target_player_id: Optional[int] = message.get("player_id")
+    if not target_player_id:
+        await manager.send_personal_message(
+            {"error": "player_id is required"}, websocket
+        )
+        return
+
+    # Load room and verify host
+    room = await crud.room.get(db, id=player.room_id)
+    if not room or room.host_token != player.session_token:
+        await manager.send_personal_message(
+            {"error": "Only the host can kick players"}, websocket
+        )
+        return
+
+    # Cannot kick yourself
+    if target_player_id == player.id:
+        await manager.send_personal_message(
+            {"error": "Host cannot kick themselves"}, websocket
+        )
+        return
+
+    # Load target player
+    target_player = await crud.player.get(db, id=target_player_id)
+    if not target_player or target_player.room_id != player.room_id:
+        await manager.send_personal_message(
+            {"error": "Player not found in this room"}, websocket
+        )
+        return
+
+    target_nickname = target_player.nickname
+
+    # Notify target player before disconnecting
+    await manager.send_to_player(
+        target_player_id,
+        {
+            "type": "kicked",
+            "message": "You have been kicked from the room by the host.",
+        },
+    )
+
+    # Force-disconnect the player's WebSocket
+    await manager.disconnect_player(target_player_id)
+
+    # Remove the player from DB
+    try:
+        await crud.player.delete(db, id=target_player_id)
+
+        # Update room player count
+        new_count = max(0, room.current_players - 1)
+        human_delta = 0 if target_player.is_ai else 1
+        ai_delta = 1 if target_player.is_ai else 0
+        await crud.room.update(
+            db,
+            db_obj=room,
+            obj_in=schemas.RoomUpdate(
+                current_players=new_count,
+                human_players=max(0, room.human_players - human_delta),
+                ai_players=max(0, room.ai_players - ai_delta),
+            ),
+        )
+    except Exception as exc:
+        logger.error(f"Failed to remove kicked player {target_player_id} from DB: {exc}")
+
+    # Notify everyone remaining
+    await manager.broadcast_to_room(
+        player.room_id,
+        {
+            "type": "player_kicked",
+            "player_id": target_player_id,
+            "nickname": target_nickname,
+            "kicked_by": player.nickname,
+        },
+    )
+    logger.info(
+        f"Player {target_player_id} ({target_nickname!r}) kicked from room "
+        f"{player.room_id} by host {player.id} ({player.nickname!r})"
+    )

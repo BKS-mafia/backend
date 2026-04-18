@@ -4,7 +4,7 @@ CRUD операции для модели Room.
 from typing import Optional, List
 import json
 import uuid
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app import schemas
 from app.models.room import Room as RoomModel, RoomStatus
@@ -80,6 +80,32 @@ class RoomCRUD:
         Получить все комнаты.
         """
         stmt = select(RoomModel)
+        result = await db.execute(stmt)
+        return result.scalars().all()
+
+    async def get_active(
+        self,
+        db: AsyncSession,
+        *,
+        skip: int = 0,
+        limit: int = 20,
+    ) -> List[RoomModel]:
+        """
+        Получить активные комнаты (статус LOBBY или STARTING) с пагинацией.
+        Используется для браузера комнат.
+        """
+        stmt = (
+            select(RoomModel)
+            .where(
+                or_(
+                    RoomModel.status == RoomStatus.LOBBY,
+                    RoomModel.status == RoomStatus.STARTING,
+                )
+            )
+            .order_by(RoomModel.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
         result = await db.execute(stmt)
         return result.scalars().all()
 

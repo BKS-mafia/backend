@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any
 from datetime import datetime
+import json
 
 
 class GameBase(BaseModel):
@@ -28,6 +29,26 @@ class GameInDBBase(GameBase):
     id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+    @field_validator("night_actions", mode="before")
+    @classmethod
+    def parse_night_actions(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, ValueError):
+                return None
+        return v
+
+    @field_validator("voting_results", mode="before")
+    @classmethod
+    def parse_voting_results(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, ValueError):
+                return None
+        return v
 
     class Config:
         from_attributes = True

@@ -74,6 +74,18 @@ class ConnectionManager:
                     self.disconnect(websocket)
                 return  # player_id is unique, stop after first match
 
+    async def disconnect_player(self, player_id: int) -> bool:
+        """Force-disconnect a specific player by player_id. Returns True if found."""
+        for websocket, pid in list(self.websocket_player.items()):
+            if pid == player_id:
+                try:
+                    await websocket.close()
+                except Exception:
+                    pass
+                self.disconnect(websocket)
+                return True
+        return False
+
     async def broadcast_to_players(self, player_ids: List[int], message: dict) -> None:
         """Broadcast a message only to specific players by their IDs."""
         player_id_set: Set[int] = set(player_ids)

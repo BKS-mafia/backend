@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any
 from datetime import datetime
+import json
 
 
 class GameEventBase(BaseModel):
@@ -22,6 +23,16 @@ class GameEventUpdate(BaseModel):
 class GameEventInDBBase(GameEventBase):
     id: int
     created_at: datetime
+
+    @field_validator("event_data", mode="before")
+    @classmethod
+    def parse_event_data(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, ValueError):
+                return None
+        return v
 
     class Config:
         from_attributes = True
