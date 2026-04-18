@@ -127,6 +127,14 @@ async def handle_websocket_message(
 
     if event_type == "chat_message":
         await handle_chat_message(websocket, player, message, db)
+    elif event_type == "ghost_chat":
+        if not player.is_alive:
+            await handle_ghost_chat_message(websocket, player, message, db)
+        else:
+            await manager.send_personal_message(
+                {"event": "error", "data": {"message": "You are still alive!"}},
+                websocket,
+            )
     elif event_type == "vote_action":
         await handle_vote_action(websocket, player, message, db)
     elif event_type == "start_game":
@@ -213,6 +221,11 @@ async def handle_chat_message(
         )
         return
 
+    # Мёртвые игроки не могут писать в основной чат — перенаправляем в Ghost Chat
+    if not player.is_alive:
+        await handle_ghost_chat_message(websocket, player, message, db)
+        return
+
     # Retrieve the active game for this room (may be None before game starts)
     game = await crud.game.get_by_room(db, room_id=player.room_id)
 
@@ -289,6 +302,51 @@ async def handle_chat_message(
         await db.commit()
 
     await manager.broadcast_to_room(player.room_id, chat_payload)
+
+
+async def handle_ghost_chat_message(
+    websocket: WebSocket,
+    player: PlayerModel,
+    message: Dict[str, Any],
+    db: AsyncSession,
+) -> None:
+    """
+    Обработка сообщения от мёртвых игроков (Ghost Chat).
+
+    Сообщение видят только мёртвые + зрители — рассылается через
+    manager.broadcast_to_ghosts(). Живые игроки это сообщение не получают.
+    """
+    if player.is_alive:
+        # Живые не имеют доступа к Ghost Chat
+        await manager.send_personal_message(
+            {"event": "error", "data": {"message": "You are still alive!"}},
+            websocket,
+        )
+        return
+
+    content: str = message.get("content", "").strip()
+    if not content:
+        await manager.send_personal_message(
+            {"error": "Ghost message content cannot be empty"}, websocket
+        )
+        return
+
+    ghost_message: Dict[str, Any] = {
+        "event": "ghost_chat_message",
+        "data": {
+            "sender_id": player.id,
+            "sender_name": player.nickname or f"Ghost_{player.id}",
+            "content": content,
+            "is_ghost": True,
+        },
+    }
+
+    # Рассылаем только призракам и зрителям
+    await manager.broadcast_to_ghosts(player.room_id, ghost_message)
+    logger.info(
+        f"Ghost message from player {player.id} ({player.nickname!r}) "
+        f"in room {player.room_id}: {content!r}"
+    )
 
 
 async def handle_vote_action(

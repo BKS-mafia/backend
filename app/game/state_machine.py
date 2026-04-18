@@ -1,7 +1,7 @@
 import asyncio
 import random
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set
 from app.models.room import Room
 from app.models.player import Player, PlayerRole
 from app.models.game import Game, GameStatus
@@ -13,6 +13,8 @@ import logging
 
 if TYPE_CHECKING:
     from app.websocket.manager import ConnectionManager
+    from app.services.ai_service import AIService
+    from app.ai.mcp_tools import MCPToolDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -32,19 +34,51 @@ class StateMachine:
         room_id: int,
         db: AsyncSession,
         ws_manager: Optional["ConnectionManager"] = None,
+        game_id: Optional[int] = None,
+        players: Optional[list] = None,
+        ai_service: Optional["AIService"] = None,
+        mcp_dispatcher: Optional["MCPToolDispatcher"] = None,
     ) -> None:
         self.room_id = room_id
         self.db = db
         self.ws_manager = ws_manager
+        self.game_id: Optional[int] = game_id
+        self.players: list = players or []
+        self.ai_service = ai_service
+        self.mcp_dispatcher = mcp_dispatcher
+
         self.current_phase = GamePhase.LOBBY
-        self.game_id: Optional[int] = None
         self.night_actions: Dict[int, Dict[str, Any]] = {}  # player_id -> action
         self.votes: Dict[int, int] = {}  # voter_id -> target_player_id
         self.day_number: int = 1
+        self.night_number: int = 0
         self.is_running: bool = False
         self.task: Optional[asyncio.Task] = None
         # Итоги последней ночи для рассылки в начале дня
         self.night_summary: Dict[str, Any] = {}
+        # История дневного чата для контекста ИИ
+        self.day_chat_history: List[dict] = []
+        # Ссылка на GameService для управления таймерами фаз (устанавливается извне)
+        self.game_service = None
+
+        self._register_dispatcher_callbacks()
+
+    # ------------------------------------------------------------------
+    # Регистрация колбэков MCP dispatcher
+    # ------------------------------------------------------------------
+
+    def _register_dispatcher_callbacks(self) -> None:
+        """Регистрируем колбэки MCP dispatcher."""
+        if not self.mcp_dispatcher:
+            return
+        self.mcp_dispatcher.register_send_message(self._process_ai_chat_message)
+        self.mcp_dispatcher.register_vote(self._process_ai_vote)
+        self.mcp_dispatcher.register_night_action(self._process_ai_night_action)
+        self.mcp_dispatcher.register_get_game_state(self._get_game_state_for_ai)
+
+    # ------------------------------------------------------------------
+    # Запуск / остановка
+    # ------------------------------------------------------------------
 
     async def start(self):
         """Start the state machine."""
@@ -80,14 +114,14 @@ class StateMachine:
         if self.ws_manager is None:
             logger.debug(
                 f"ws_manager не задан для комнаты {self.room_id}; "
-                f"пропуск рассылки события '{message.get('type')}'"
+                f"пропуск рассылки события '{message.get('type') or message.get('event')}'"
             )
             return
         try:
             await self.ws_manager.broadcast_to_room(self.room_id, message)
         except Exception as exc:
             logger.error(
-                f"Ошибка рассылки события '{message.get('type')}' "
+                f"Ошибка рассылки события '{message.get('type') or message.get('event')}' "
                 f"в комнату {self.room_id}: {exc}"
             )
 
@@ -95,7 +129,8 @@ class StateMachine:
         """Отправить сообщение конкретному игроку через WebSocket."""
         if self.ws_manager is None:
             logger.debug(
-                f"ws_manager не задан; пропуск личного события '{message.get('type')}' "
+                f"ws_manager не задан; пропуск личного события "
+                f"'{message.get('type') or message.get('event')}' "
                 f"для игрока {player_id}"
             )
             return
@@ -103,9 +138,96 @@ class StateMachine:
             await self.ws_manager.send_to_player(player_id, message)
         except Exception as exc:
             logger.error(
-                f"Ошибка отправки события '{message.get('type')}' "
+                f"Ошибка отправки события '{message.get('type') or message.get('event')}' "
                 f"игроку {player_id}: {exc}"
             )
+
+    async def _refresh_players(self) -> None:
+        """Обновить self.players свежими данными из БД."""
+        result = await self.db.execute(
+            select(Player).where(Player.room_id == self.room_id)
+        )
+        self.players = list(result.scalars().all())
+
+    def _build_game_context(self, extra: dict = None) -> dict:
+        """Строит словарь контекста игры для передачи в ai_service."""
+        alive = [
+            {"id": p.id, "name": p.nickname or f"Player{p.id}"}
+            for p in self.players if p.is_alive
+        ]
+        dead = [
+            {"id": p.id, "name": p.nickname or f"Player{p.id}"}
+            for p in self.players if not p.is_alive
+        ]
+        ctx = {
+            "phase": self.current_phase.value if hasattr(self.current_phase, "value") else str(self.current_phase),
+            "alive_players": alive,
+            "dead_players": dead,
+            "night_number": self.night_number,
+            "recent_messages": self.day_chat_history[-10:],
+            "day_chat_history": self.day_chat_history,
+        }
+        if extra:
+            ctx.update(extra)
+        return ctx
+
+    async def _get_game_state_for_ai(self, player_id: int) -> dict:
+        """Колбэк MCP get_game_state — возвращает сводку состояния игры."""
+        return self._build_game_context()
+
+    async def _process_ai_chat_message(self, player_id: int, content: str) -> dict:
+        """Колбэк MCP send_message — обрабатывает сообщение бота в общий чат."""
+        player = next((p for p in self.players if p.id == player_id), None)
+        if not player or not player.is_alive:
+            return {"ok": False, "reason": "player not found or dead"}
+
+        msg = {
+            "sender_id": player_id,
+            "sender_name": player.nickname or f"Player{player_id}",
+            "content": content,
+            "is_ai": True,
+        }
+        self.day_chat_history.append(msg)
+
+        # Разослать всем игрокам комнаты
+        await self._broadcast({
+            "event": "chat_message",
+            "data": msg,
+        })
+        return {"ok": True}
+
+    async def _process_ai_vote(self, player_id: int, target_player_id: int) -> dict:
+        """Колбэк MCP vote_for_player — регистрирует голос ИИ."""
+        if player_id not in self.votes:
+            self.votes[player_id] = target_player_id
+            player = next((p for p in self.players if p.id == player_id), None)
+            await self._broadcast({
+                "event": "vote_cast",
+                "data": {
+                    "voter_id": player_id,
+                    "voter_name": (player.nickname if player else f"Player{player_id}"),
+                    "target_id": target_player_id,
+                },
+            })
+        return {"ok": True, "voted_for": target_player_id}
+
+    async def _process_ai_night_action(
+        self, player_id: int, action_type: str, target_player_id: int
+    ) -> dict:
+        """Колбэк MCP perform_night_action — регистрирует ночное действие ИИ.
+
+        Сохраняем в формате совместимом с resolve_night_actions:
+        {"action": ..., "target_id": ...}
+        """
+        self.night_actions[player_id] = {
+            "action": action_type,
+            "target_id": target_player_id,
+        }
+        return {"ok": True, "action": action_type, "target": target_player_id}
+
+    # ------------------------------------------------------------------
+    # Главный цикл
+    # ------------------------------------------------------------------
 
     async def run(self):
         """Main state machine loop."""
@@ -130,63 +252,62 @@ class StateMachine:
         except asyncio.CancelledError:
             logger.info(f"State machine cancelled for room {self.room_id}")
         except Exception as e:
-            logger.error(f"Error in state machine for room {self.room_id}: {e}")
+            logger.error(f"Error in state machine for room {self.room_id}: {e}", exc_info=True)
         finally:
             self.is_running = False
 
+    # ------------------------------------------------------------------
+    # Фазы игры
+    # ------------------------------------------------------------------
+
     async def handle_lobby(self):
-        """Handle the lobby phase: wait for players to join."""
-        # In a real implementation, we would wait for a start signal or enough players.
-        # For now, we'll just sleep and check for start condition.
+        """Фаза лобби — ожидаем сигнала старта игры."""
+        await self._broadcast({"event": "phase_changed", "data": {"phase": "lobby"}})
+        # Реальный переход в ROLE_ASSIGNMENT происходит по команде host'а через API/WS.
+        # Здесь просто останавливаем цикл до получения такой команды.
         await asyncio.sleep(1)
-        # Check if the game should start (e.g., host sent start_game or enough players)
-        # This is a placeholder; actual trigger would come from WebSocket or API.
-        # We'll transition to role assignment when the game starts.
-        pass
 
     async def handle_role_assignment(self):
-        """Assign roles to players and initialize the game."""
+        """Назначить роли игрокам и инициализировать игру."""
         logger.info(f"Assigning roles for room {self.room_id}")
-        # Get the room and players
         room = await self.db.get(Room, self.room_id)
         if not room:
             logger.error(f"Room {self.room_id} not found")
             await self.stop()
             return
 
-        # Get all players in the room
+        # Получить всех игроков комнаты
         result = await self.db.execute(select(Player).where(Player.room_id == self.room_id))
-        players = result.scalars().all()
+        players = list(result.scalars().all())
         if not players:
             logger.error(f"No players found for room {self.room_id}")
             await self.stop()
             return
 
-        # Determine number of mafia, doctors, commissioners based on player count
-        # Simple distribution: 1 mafia per 3 players, 1 doctor, 1 commissioner, rest civilians
+        # Сохраняем список игроков в памяти
+        self.players = players
+
+        # Распределение ролей: 1 мафия на каждые 3 игрока, 1 доктор, 1 комиссар
         num_players = len(players)
         num_mafia = max(1, num_players // 3)
         num_doctors = 1 if num_players >= 4 else 0
         num_commissioners = 1 if num_players >= 5 else 0
         num_civilians = num_players - num_mafia - num_doctors - num_commissioners
 
-        # Create a list of roles
         roles = (
             [PlayerRole.MAFIA] * num_mafia
             + [PlayerRole.DOCTOR] * num_doctors
             + [PlayerRole.COMMISSIONER] * num_commissioners
             + [PlayerRole.CIVILIAN] * num_civilians
         )
-        # Shuffle the roles
         random.shuffle(roles)
 
-        # Assign roles to players
         for player, role in zip(players, roles):
             player.role = role
             self.db.add(player)
         await self.db.commit()
 
-        # Create a new game entry
+        # Создать запись игры
         game = Game(
             room_id=self.room_id,
             status=GameStatus.NIGHT,
@@ -210,15 +331,31 @@ class StateMachine:
                 },
             )
 
-        # Transition to night phase
         self.current_phase = GamePhase.NIGHT
         await self.update_game_status(GameStatus.NIGHT)
 
     async def handle_night(self) -> None:
-        """Handle the night phase: perform night actions."""
-        logger.info(f"Starting night phase for room {self.room_id}, day {self.day_number}")
+        """Фаза ночи — ИИ-игроки выполняют ночные действия."""
+        self.night_number += 1
+        self.night_actions = {}
 
-        # ── Уведомить всех игроков о начале ночной фазы ──────────────────────
+        logger.info(
+            f"Starting night phase for room {self.room_id}, night {self.night_number}"
+        )
+
+        # Обновляем список игроков (актуальный is_alive)
+        await self._refresh_players()
+
+        await self._broadcast(
+            {
+                "event": "phase_changed",
+                "data": {
+                    "phase": "night",
+                    "night_number": self.night_number,
+                },
+            }
+        )
+        # Обратная совместимость — старый тип события
         await self._broadcast(
             {
                 "type": "night_started",
@@ -228,52 +365,102 @@ class StateMachine:
             }
         )
 
-        # In a real game, we would:
-        # 1. Ask mafia to choose a victim
-        # 2. Ask doctor to choose a player to heal
-        # 3. Ask commissioner to choose a player to investigate
-        # 4. Resolve the actions
-        # For simplicity, we'll simulate AI actions and then move to day.
+        # Внешний страховочный таймер — принудительно завершит ночь если истечёт
+        if self.game_service:
+            self.game_service.start_phase_timer(self.room_id, "night")
 
-        # Get alive players
-        result = await self.db.execute(
-            select(Player).where(Player.room_id == self.room_id, Player.is_alive == True)
-        )
-        alive_players = result.scalars().all()
+        # Разделяем ИИ-игроков по ролям
+        ai_players = [p for p in self.players if p.is_ai and p.is_alive]
+        mafia_ai = [p for p in ai_players if p.role == PlayerRole.MAFIA]
+        doctor_ai = [p for p in ai_players if p.role == PlayerRole.DOCTOR]
+        commissioner_ai = [p for p in ai_players if p.role == PlayerRole.COMMISSIONER]
 
-        # Reset night actions
-        self.night_actions = {}
+        if self.ai_service and self.mcp_dispatcher:
+            context = self._build_game_context({"phase": "night"})
+            tasks: List[Any] = []
 
-        # For each alive player with a night role, simulate an action
-        for player in alive_players:
-            if player.role == PlayerRole.MAFIA:
-                # Mafia chooses a random victim (not themselves)
-                possible_targets = [p for p in alive_players if p.id != player.id]
-                if possible_targets:
-                    target = random.choice(possible_targets)
+            for player in mafia_ai:
+                ctx = {
+                    **context,
+                    "phase": "night",
+                    "your_role": "mafia",
+                    "instruction": "Choose a civilian to kill tonight.",
+                }
+                tasks.append(
+                    self.ai_service.request_night_action(player, ctx, self.mcp_dispatcher)
+                )
+
+            for player in doctor_ai:
+                ctx = {
+                    **context,
+                    "phase": "night",
+                    "your_role": "doctor",
+                    "instruction": "Choose a player to heal/protect tonight.",
+                }
+                tasks.append(
+                    self.ai_service.request_night_action(player, ctx, self.mcp_dispatcher)
+                )
+
+            for player in commissioner_ai:
+                ctx = {
+                    **context,
+                    "phase": "night",
+                    "your_role": "detective",
+                    "instruction": "Choose a player to investigate their alignment.",
+                }
+                tasks.append(
+                    self.ai_service.request_night_action(player, ctx, self.mcp_dispatcher)
+                )
+
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for idx, res in enumerate(results):
+                    if isinstance(res, Exception):
+                        logger.error(f"AI night action error (task {idx}): {res}")
+        else:
+            # Fallback: случайный выбор если ai_service не подключён
+            alive_non_mafia = [
+                p for p in self.players if p.is_alive and p.role != PlayerRole.MAFIA
+            ]
+            alive_all = [p for p in self.players if p.is_alive]
+
+            for player in mafia_ai:
+                if alive_non_mafia:
+                    target = random.choice(alive_non_mafia)
                     self.night_actions[player.id] = {
                         "action": "kill",
-                        "target_id": target.id
+                        "target_id": target.id,
                     }
-            elif player.role == PlayerRole.DOCTOR:
-                # Doctor chooses a random player to heal (could be themselves)
-                target = random.choice(alive_players)
-                self.night_actions[player.id] = {
-                    "action": "heal",
-                    "target_id": target.id
-                }
-            elif player.role == PlayerRole.COMMISSIONER:
-                # Commissioner chooses a random player to investigate
-                target = random.choice(alive_players)
-                self.night_actions[player.id] = {
-                    "action": "investigate",
-                    "target_id": target.id
-                }
 
-        # Resolve night actions
+            for player in doctor_ai:
+                if alive_all:
+                    target = random.choice(alive_all)
+                    self.night_actions[player.id] = {
+                        "action": "heal",
+                        "target_id": target.id,
+                    }
+
+            for player in commissioner_ai:
+                non_self = [p for p in alive_all if p.id != player.id]
+                if non_self:
+                    target = random.choice(non_self)
+                    self.night_actions[player.id] = {
+                        "action": "investigate",
+                        "target_id": target.id,
+                    }
+
+        # Если все ночные роли — ИИ, небольшая реалистичная пауза
+        human_night_players = [
+            p for p in self.players
+            if not p.is_ai and p.is_alive
+            and p.role in (PlayerRole.MAFIA, PlayerRole.DOCTOR, PlayerRole.COMMISSIONER)
+        ]
+        if not human_night_players:
+            await asyncio.sleep(2)
+
         await self.resolve_night_actions()
 
-        # After resolving, transition to day phase
+        # Переход в дневную фазу
         self.current_phase = GamePhase.DAY
         await self.update_game_status(GameStatus.DAY)
 
@@ -302,20 +489,25 @@ class StateMachine:
                         "is_mafia": target.role == PlayerRole.MAFIA,
                     }
 
-        # Determine who actually dies: killed by mafia and not healed
+        # Определяем действительно убитых: убиты мафией, но не вылечены доктором
         actually_killed: Set[int] = killed_by_mafia - healed_by_doctor
 
-        # Собираем информацию о убитых игроках для night_summary
+        # Собираем информацию об убитых игроках для night_summary
         killed_details: List[Dict[str, Any]] = []
         for player_id in actually_killed:
             player: Optional[Player] = await self.db.get(Player, player_id)
             if player:
                 player.is_alive = False
                 self.db.add(player)
+                # Переводим убитого игрока в Ghost Chat
+                if self.ws_manager:
+                    await self.ws_manager.move_to_ghost(self.room_id, player.id)
                 killed_details.append(
                     {"player_id": player.id, "nickname": player.nickname}
                 )
-                logger.info(f"Player {player_id} ({player.nickname}) was killed during the night")
+                logger.info(
+                    f"Player {player_id} ({player.nickname}) was killed during the night"
+                )
 
         # Информация о вылеченных
         healed_details: List[Dict[str, Any]] = []
@@ -333,7 +525,6 @@ class StateMachine:
             "day_number": self.day_number,
             "killed": killed_details,
             "healed": healed_details,
-            # Результаты расследований отправляем лично комиссару ниже
         }
 
         # Отправляем результат расследования лично каждому комиссару
@@ -353,107 +544,289 @@ class StateMachine:
                 },
             )
 
-        # Check if the game is over (e.g., all mafia dead or mafia outnumber civilians)
+        # Обновляем in-memory список игроков после смертей
+        await self._refresh_players()
+
+        # Проверяем условие конца игры
         await self.check_game_over()
 
     async def handle_day(self) -> None:
-        """Handle the day phase: discussion and preparation for voting."""
+        """Фаза дня — обсуждение перед голосованием."""
+        self.day_chat_history = []  # Сбрасываем историю нового дня
+
         logger.info(f"Starting day phase for room {self.room_id}, day {self.day_number}")
 
-        # ── Рассылаем итоги ночи всем игрокам ────────────────────────────────
+        await self._refresh_players()
+
+        # Рассылаем итоги ночи всем игрокам
         await self._broadcast(
             {
                 "type": "day_started",
+                "event": "phase_changed",
                 "phase": GamePhase.DAY.value,
+                "data": {"phase": "day", "day_number": self.night_number},
                 "day_number": self.night_summary.get("day_number", self.day_number),
                 "night_results": {
                     "killed": self.night_summary.get("killed", []),
                     "healed": self.night_summary.get("healed", []),
                 },
-                "message": (
-                    "Наступил день. Обсудите произошедшее и проголосуйте за подозреваемого."
-                ),
+                "message": "Наступил день. Обсудите произошедшее и проголосуйте за подозреваемого.",
             }
         )
 
-        # In a real game, players discuss and then vote.
-        # We'll just wait for a bit and then transition to voting.
-        await asyncio.sleep(5)  # Simulate discussion time
+        # Внешний страховочный таймер — принудительно завершит день если истечёт
+        if self.game_service:
+            self.game_service.start_phase_timer(self.room_id, "day")
 
-        # ── Уведомить о начале фазы голосования ──────────────────────────────
+        if self.ai_service and self.mcp_dispatcher:
+            # Запускаем дневной чат ботов в фоне с реалистичными задержками
+            asyncio.create_task(self._run_ai_day_chat())
+            # Ждём время обсуждения (30 секунд) пока боты общаются в фоне
+            await asyncio.sleep(30)
+        else:
+            # Заглушка: просто ждём 5 секунд
+            await asyncio.sleep(5)
+
+        # Уведомить о начале фазы голосования
         await self._broadcast(
             {
                 "type": "voting_started",
+                "event": "phase_changed",
                 "phase": GamePhase.VOTING.value,
+                "data": {"phase": "voting"},
                 "day_number": self.day_number,
                 "message": "Время голосовать! Выберите игрока для исключения.",
             }
         )
 
-        # Transition to voting phase
+        # Переход в фазу голосования
         self.current_phase = GamePhase.VOTING
         await self.update_game_status(GameStatus.VOTING)
 
-    async def handle_voting(self):
-        """Handle the voting phase: players vote to eliminate a player."""
+    async def _run_ai_day_chat(self) -> None:
+        """Запускает дневной чат ботов с реалистичными задержками."""
+        ai_alive = [p for p in self.players if p.is_ai and p.is_alive]
+        if not ai_alive:
+            return
+
+        # 3 раунда диалога с рандомными задержками
+        for round_num in range(3):
+            # Задержка между раундами (5-15 секунд, уменьшена для реализма в 30с окне)
+            await asyncio.sleep(random.uniform(3, 8))
+
+            # Перемешиваем порядок ботов и берём случайное подмножество
+            bots_this_round = random.sample(
+                ai_alive, k=min(len(ai_alive), random.randint(1, len(ai_alive)))
+            )
+
+            for bot in bots_this_round:
+                # Проверяем что бот ещё жив
+                if not bot.is_alive:
+                    continue
+
+                # Индикатор набора текста
+                await self._broadcast(
+                    {"event": "typing_indicator", "data": {"player_id": bot.id, "typing": True}}
+                )
+
+                # Задержка "печатания" (2-5 секунд)
+                await asyncio.sleep(random.uniform(2, 5))
+
+                ctx = self._build_game_context({"phase": "day"})
+                try:
+                    await self.ai_service.request_day_message(bot, ctx, self.mcp_dispatcher)
+                except Exception as e:
+                    logger.error(f"AI day message error (player_id={bot.id}): {e}")
+
+                await self._broadcast(
+                    {"event": "typing_indicator", "data": {"player_id": bot.id, "typing": False}}
+                )
+
+                # Пауза между сообщениями разных ботов
+                await asyncio.sleep(random.uniform(1, 3))
+
+    async def handle_voting(self) -> None:
+        """Фаза голосования — игроки голосуют за исключение подозреваемого."""
         logger.info(f"Starting voting phase for room {self.room_id}, day {self.day_number}")
-        # Get alive players
-        result = await self.db.execute(
-            select(Player).where(Player.room_id == self.room_id, Player.is_alive == True)
-        )
-        alive_players = result.scalars().all()
 
-        # Reset votes
         self.votes = {}
+        await self._refresh_players()
 
-        # For simplicity, each alive player votes for a random other alive player
-        for player in alive_players:
-            possible_targets = [p for p in alive_players if p.id != player.id]
-            if possible_targets:
-                target = random.choice(possible_targets)
-                self.votes[player.id] = target.id
+        await self._broadcast(
+            {
+                "event": "phase_changed",
+                "type": "voting_started",
+                "data": {"phase": "voting"},
+                "day_number": self.day_number,
+                "message": "Голосование началось! Выберите игрока для исключения.",
+            }
+        )
 
-        # Count votes
+        # Внешний страховочный таймер — принудительно завершит голосование если истечёт
+        if self.game_service:
+            self.game_service.start_phase_timer(self.room_id, "voting")
+
+        if self.ai_service and self.mcp_dispatcher:
+            ai_alive = [p for p in self.players if p.is_ai and p.is_alive]
+
+            vote_tasks = [
+                self._ai_vote_with_delay(bot, self._build_game_context({"phase": "voting"}))
+                for bot in ai_alive
+            ]
+
+            if vote_tasks:
+                await asyncio.gather(*vote_tasks, return_exceptions=True)
+        else:
+            # Fallback: случайное голосование
+            for player in self.players:
+                if player.is_ai and player.is_alive:
+                    targets = [p for p in self.players if p.is_alive and p.id != player.id]
+                    if targets:
+                        target = random.choice(targets)
+                        self.votes[player.id] = target.id
+
+        # Ждём голосов живых людей если они есть
+        human_alive = [p for p in self.players if not p.is_ai and p.is_alive]
+        if not human_alive:
+            await asyncio.sleep(2)
+
+        # Финализируем голосование (подсчёт + выбывание + переход к ночи)
+        await self._finalize_voting()
+
+    async def _finalize_voting(self) -> None:
+        """
+        Подсчитать голоса, применить выбывание, проверить конец игры.
+        Вызывается как из handle_voting (нормальный путь), так и из
+        force_advance_phase (принудительное завершение по таймеру).
+        """
+        # ── Подсчёт голосов и выбывание ─────────────────────────────────────
         vote_counts: Dict[int, int] = {}
         for voter_id, target_id in self.votes.items():
             vote_counts[target_id] = vote_counts.get(target_id, 0) + 1
 
-        # Find the player with the most votes
+        eliminated_id: Optional[int] = None
         if vote_counts:
-            target_id = max(vote_counts, key=vote_counts.get)
-            max_votes = vote_counts[target_id]
-            # Check for tie: if multiple players have the same max votes, no one is eliminated
+            max_target_id = max(vote_counts, key=vote_counts.get)
+            max_votes = vote_counts[max_target_id]
+            # Ничья — никто не выбывает
             if list(vote_counts.values()).count(max_votes) > 1:
                 logger.info("Vote resulted in a tie, no elimination")
-                eliminated_id = None
             else:
-                eliminated_id = target_id
-                logger.info(f"Player {eliminated_id} received {max_votes} votes and is eliminated")
-        else:
-            eliminated_id = None
+                eliminated_id = max_target_id
+                logger.info(
+                    f"Player {eliminated_id} received {max_votes} votes and is eliminated"
+                )
 
-        # Eliminate the player if there is a clear winner
         if eliminated_id is not None:
             player = await self.db.get(Player, eliminated_id)
             if player:
                 player.is_alive = False
                 self.db.add(player)
-                logger.info(f"Player {eliminated_id} ({player.nickname}) was eliminated during voting")
+                # Переводим выбывшего в Ghost Chat
+                if self.ws_manager:
+                    await self.ws_manager.move_to_ghost(self.room_id, player.id)
+                logger.info(
+                    f"Player {eliminated_id} ({player.nickname}) was eliminated during voting"
+                )
+                await self._broadcast(
+                    {
+                        "event": "player_eliminated",
+                        "type": "player_eliminated",
+                        "data": {
+                            "player_id": eliminated_id,
+                            "nickname": player.nickname,
+                            "role": player.role.value if player.role else None,
+                        },
+                    }
+                )
 
         await self.db.commit()
+        await self._refresh_players()
 
-        # After voting, increment day and check for game over
+        # Инкремент дня и проверка конца игры
         self.day_number += 1
         await self.check_game_over()
 
-        # If game not over, transition to night
+        # Если игра не завершена — переходим к ночи
         if self.current_phase != GamePhase.FINISHED:
             self.current_phase = GamePhase.NIGHT
             await self.update_game_status(GameStatus.NIGHT)
+            if self.game_service:
+                self.game_service.start_phase_timer(self.room_id, "night")
+
+    async def _ai_vote_with_delay(self, player: Any, context: dict) -> None:
+        """Запрашивает голос у ИИ с небольшой случайной задержкой."""
+        await asyncio.sleep(random.uniform(2, 8))
+        try:
+            await self.ai_service.request_vote(player, context, self.mcp_dispatcher)
+        except Exception as e:
+            logger.error(f"AI vote error (player_id={player.id}): {e}")
+            # Fallback: случайный голос
+            targets = [p for p in self.players if p.is_alive and p.id != player.id]
+            if targets:
+                target = random.choice(targets)
+                self.votes[player.id] = target.id
+
+    async def force_advance_phase(self) -> None:
+        """
+        Принудительно завершить текущую фазу и перейти к следующей.
+        Вызывается таймером из game_service когда время фазы истекло.
+        """
+        phase_val = (
+            self.current_phase.value
+            if hasattr(self.current_phase, "value")
+            else str(self.current_phase)
+        )
+        logger.info(
+            f"Force advancing phase '{phase_val}' for room {self.room_id}"
+        )
+
+        if self.current_phase == GamePhase.NIGHT:
+            # Принудительно завершаем ночь — запускаем resolve с имеющимися действиями
+            await self.resolve_night_actions()
+            # Переход в дневную фазу (resolve не переключает сам)
+            if self.current_phase != GamePhase.FINISHED:
+                self.current_phase = GamePhase.DAY
+                await self.update_game_status(GameStatus.DAY)
+
+        elif self.current_phase == GamePhase.DAY:
+            # Принудительно завершаем обсуждение — переходим к голосованию
+            self.current_phase = GamePhase.VOTING
+            await self.update_game_status(GameStatus.VOTING)
+            await self._broadcast(
+                {
+                    "event": "phase_changed",
+                    "type": "voting_started",
+                    "data": {"phase": "voting"},
+                    "day_number": self.day_number,
+                    "message": "Время обсуждения истекло. Голосование началось!",
+                }
+            )
+            if self.game_service:
+                self.game_service.start_phase_timer(self.room_id, "voting")
+
+        elif self.current_phase == GamePhase.VOTING:
+            # Принудительно завершаем голосование — считаем с тем что есть
+            await self._finalize_voting()
+
+        elif self.current_phase == GamePhase.LOBBY:
+            logger.info(
+                f"force_advance_phase called during LOBBY for room {self.room_id}, ignoring"
+            )
+
+    async def _finish_turing_test(self) -> None:
+        """Завершить тест Тьюринга (заглушка для будущей реализации)."""
+        logger.info(f"Turing test phase force-ended for room {self.room_id}")
+        self.current_phase = GamePhase.VOTING
+        await self.update_game_status(GameStatus.VOTING)
+
+    async def handle_finished(self) -> None:
+        """Фаза завершения игры — логирование и остановка."""
+        logger.info(f"Game finished for room {self.room_id}")
+        self.is_running = False
 
     async def check_game_over(self) -> None:
-        """Check if the game is over and set the phase to finished if so."""
-        # Get alive players
+        """Проверить условия завершения игры и установить фазу FINISHED."""
         result = await self.db.execute(
             select(Player).where(Player.room_id == self.room_id, Player.is_alive == True)
         )
@@ -461,25 +834,24 @@ class StateMachine:
         alive_mafia: List[Player] = [p for p in alive_players if p.role == PlayerRole.MAFIA]
         alive_civilians: List[Player] = [p for p in alive_players if p.role != PlayerRole.MAFIA]
 
-        # Game over conditions:
-        # 1. All mafia are dead -> civilians win
-        # 2. Mafia number >= civilian number -> mafia wins (since they can control the vote)
+        # Условия конца игры:
+        # 1. Вся мафия мертва → мирные победили
+        # 2. Мафия >= мирных → мафия победила
         winner: Optional[str]
         if not alive_mafia:
             logger.info(f"Game over: all mafia are dead. Civilians win in room {self.room_id}")
             winner = "civilians"
         elif len(alive_mafia) >= len(alive_civilians):
-            logger.info(f"Game over: mafia outnumber or equal civilians. Mafia wins in room {self.room_id}")
+            logger.info(
+                f"Game over: mafia outnumber or equal civilians. Mafia wins in room {self.room_id}"
+            )
             winner = "mafia"
         else:
-            # Game continues
             return
 
-        # Set game as finished
         self.current_phase = GamePhase.FINISHED
         await self.update_game_status(GameStatus.FINISHED)
 
-        # Update the game record with the winner
         if self.game_id:
             game: Optional[Game] = await self.db.get(Game, self.game_id)
             if game:
@@ -489,7 +861,6 @@ class StateMachine:
 
         logger.info(f"Game finished in room {self.room_id}. Winner: {winner}")
 
-        # ── Уведомить всех игроков о завершении игры ─────────────────────────
         # Раскрываем роли ВСЕХ игроков (включая мёртвых) для финального экрана
         all_result = await self.db.execute(
             select(Player).where(Player.room_id == self.room_id)
@@ -507,6 +878,8 @@ class StateMachine:
         await self._broadcast(
             {
                 "type": "game_over",
+                "event": "game_over",
+                "data": {"winner": winner},
                 "winner": winner,
                 "day_number": self.day_number,
                 "players": reveal_players,
@@ -518,15 +891,15 @@ class StateMachine:
             }
         )
 
-    async def update_game_status(self, status: GameStatus):
-        """Update the game status in the database."""
+    async def update_game_status(self, status: GameStatus) -> None:
+        """Обновить статус игры в базе данных."""
         if self.game_id:
             game = await self.db.get(Game, self.game_id)
             if game:
                 game.status = status
                 self.db.add(game)
                 await self.db.commit()
-        # Also update the room status if needed (e.g., lobby -> playing)
+        # Обновляем статус комнаты при необходимости
         room = await self.db.get(Room, self.room_id)
         if room and status in [GameStatus.NIGHT, GameStatus.DAY, GameStatus.VOTING]:
             if room.status == "lobby":

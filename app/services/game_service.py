@@ -44,6 +44,7 @@ class GameService:
         self.active_machines: Dict[int, StateMachine] = {}  # room_id -> StateMachine
         self.tasks: Dict[int, asyncio.Task] = {}  # room_id -> задача таймера
         self.ready_players: Dict[int, set] = {}  # room_id -> set of ready player_ids
+        self._phase_timers: Dict[int, asyncio.Task] = {}  # room_id -> asyncio.Task (таймер фазы)
 
     async def _fill_with_ai_players(
         self,
@@ -202,6 +203,8 @@ class GameService:
         # Создание State Machine с передачей ws_manager для рассылки событий
         machine = StateMachine(room_id=room_id, db=db, ws_manager=self.ws_manager)
         self.active_machines[room_id] = machine
+        # Связываем machine с сервисом для запуска таймеров при смене фаз
+        machine.game_service = self
 
         # Запуск State Machine в фоне
         asyncio.create_task(machine.start())
@@ -217,13 +220,8 @@ class GameService:
                 "message": "Игра началась! Распределение ролей...",
             },
         )
-
-        # Запуск таймера для автоматических переходов (если нужно)
-        # Пока State Machine сама управляет переходами, но можно добавить внешние таймеры
-        # для принудительного перехода, если игроки не успевают.
-        # Создадим задачу, которая будет следить за временем фаз.
-        task = asyncio.create_task(self._phase_timer(room_id, db))
-        self.tasks[room_id] = task
+        # Таймеры фаз запускаются автоматически самой State Machine
+        # через machine.game_service.start_phase_timer() при каждом переходе фаз.
 
         return {
             "room_id": room_id,
@@ -253,6 +251,8 @@ class GameService:
         if task:
             task.cancel()
             del self.tasks[room_id]
+        # Отмена таймера фазы
+        self.cancel_phase_timer(room_id)
 
         # Обновление статуса комнаты на "finished"
         room = await self.room_crud.get(db, id=room_id)
@@ -447,31 +447,85 @@ class GameService:
             "new_phase": target_phase.value,
         }
 
-    async def _phase_timer(self, room_id: int, db: AsyncSession):
+    async def _phase_timer(self, room_id: int, phase: str, duration_seconds: int):
         """
-        Фоновая задача, которая следит за временем фазы и принудительно переходит,
-        если время истекло.
+        Отсчёт времени фазы. По истечении принудительно завершает фазу.
+
+        Args:
+            room_id: ID комнаты (он же ключ state machine)
+            phase: имя фазы ("night", "day", "voting")
+            duration_seconds: длительность фазы в секундах
         """
-        # Конфигурация времени фаз (в секундах)
-        PHASE_TIMEOUTS = {
-            GamePhase.NIGHT: 60,      # 1 минута на ночные действия
-            GamePhase.DAY: 120,       # 2 минуты на обсуждение
-            GamePhase.VOTING: 90,     # 1.5 минуты на голосование
+        try:
+            await asyncio.sleep(duration_seconds)
+
+            # Проверяем, что machine всё ещё существует и в той же фазе
+            state_machine = self.active_machines.get(room_id)
+            if state_machine is None:
+                return
+
+            current_phase_value = (
+                state_machine.current_phase.value
+                if hasattr(state_machine.current_phase, "value")
+                else str(state_machine.current_phase)
+            )
+            if current_phase_value != phase:
+                return  # фаза уже сменилась — кто-то завершил раньше
+
+            # Принудительно завершаем текущую фазу
+            logger.info(
+                f"Phase timer expired for room {room_id}, phase={phase}. "
+                "Forcing advance."
+            )
+            await state_machine.force_advance_phase()
+
+        except asyncio.CancelledError:
+            pass  # Таймер был отменён — это нормально
+        except Exception as e:
+            logger.error(f"Phase timer error for room {room_id}: {e}")
+
+    def start_phase_timer(
+        self, room_id: int, phase: str, duration_seconds: int = None
+    ) -> asyncio.Task:
+        """
+        Запустить таймер для фазы. Отменяет предыдущий таймер если был.
+
+        Длительности по умолчанию:
+        - night: 60 секунд
+        - day: 120 секунд
+        - voting: 60 секунд
+        - turing_test: 90 секунд
+        """
+        DEFAULT_DURATIONS = {
+            "night": 60,
+            "day": 120,
+            "voting": 60,
+            "turing_test": 90,
         }
-        while True:
-            await asyncio.sleep(5)  # Проверяем каждые 5 секунд
-            machine = self.active_machines.get(room_id)
-            if not machine:
-                break
-            phase = machine.current_phase
-            timeout = PHASE_TIMEOUTS.get(phase)
-            if timeout:
-                # Здесь нужно отслеживать, сколько времени фаза уже длится.
-                # Для простоты пропустим реализацию точного таймера.
-                # Можно добавить логику с временем начала фазы.
-                pass
-            # Если нужно, можно принудительно переходить после таймаута.
-            # Пока оставим заглушку.
+
+        if duration_seconds is None:
+            duration_seconds = DEFAULT_DURATIONS.get(phase, 60)
+
+        # Отменяем предыдущий таймер если есть
+        self.cancel_phase_timer(room_id)
+
+        # Запускаем новый таймер
+        task = asyncio.create_task(
+            self._phase_timer(room_id, phase, duration_seconds)
+        )
+        self._phase_timers[room_id] = task
+        logger.debug(
+            f"Phase timer started for room {room_id}, phase={phase}, "
+            f"duration={duration_seconds}s"
+        )
+        return task
+
+    def cancel_phase_timer(self, room_id: int) -> None:
+        """Отменить активный таймер фазы для комнаты."""
+        existing = self._phase_timers.get(room_id)
+        if existing and not existing.done():
+            existing.cancel()
+        self._phase_timers.pop(room_id, None)
 
     async def cleanup_room(self, room_id: int):
         """
@@ -483,6 +537,7 @@ class GameService:
         task = self.tasks.pop(room_id, None)
         if task:
             task.cancel()
+        self.cancel_phase_timer(room_id)
         logger.info(f"Ресурсы игры для комнаты {room_id} очищены")
 
 
