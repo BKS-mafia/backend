@@ -4,10 +4,11 @@ Script to initialize the database with tables and initial data.
 """
 import asyncio
 import logging
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from app.models.base import Base
-from app.models.room import Room
+from app.models.room import Room, RoomStatus
 from app.models.player import Player
 from app.models.game import Game
 from app.models.game_event import GameEvent
@@ -46,9 +47,10 @@ async def create_initial_data() -> None:
         sample_room = Room(
             room_id="test-room-1",
             host_token="test-host-token",
-            status="lobby",
-            max_players=10,
-            min_players=5,
+            status=RoomStatus.LOBBY,
+            total_players=8,
+            ai_count=3,
+            people_count=5,
             current_players=0,
             ai_players=0,
             human_players=0,
